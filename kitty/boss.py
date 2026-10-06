@@ -16,6 +16,9 @@ from dataclasses import dataclass
 from functools import partial
 from gettext import gettext as _
 from gettext import ngettext
+from queue import Empty, SimpleQueue
+from textwrap import fill
+from threading import Thread
 from time import sleep
 from typing import (
     TYPE_CHECKING,
@@ -111,6 +114,7 @@ from .fast_data_types import (
     os_window_focus_counters,
     os_window_font_size,
     redirect_mouse_handling,
+    remove_timer,
     request_callback_with_thumbnail,
     ring_bell,
     run_with_activation_token,
@@ -180,6 +184,11 @@ from .utils import (
     which,
 )
 from .window import CommandOutput, CwdRequest, Window, global_watchers
+
+
+def _wrap_plugin_confirmation(message: str) -> str:
+    return '\n\n'.join(fill(paragraph, width=68) for paragraph in message.split('\n\n'))
+
 
 if TYPE_CHECKING:
     from .fast_data_types import OSWindowSize
@@ -467,6 +476,19 @@ class Boss:
             self.atexit.unlink(effective_config_path)
         if effective_config_error:
             self.misc_config_errors.append(effective_config_error)
+        from .plugins import PluginManager
+
+        self.plugin_manager = PluginManager(
+            config_dir,
+            self._refresh_plugin_mappings,
+            self._read_plugin_screen,
+            self._send_plugin_text,
+            self._scroll_plugin_window,
+            self._send_plugin_keys,
+        )
+        self.plugin_manager.load_enabled()
+        self._inject_plugin_mappings()
+        self.mappings.update_keymap()
 
     def startup_first_child(self, os_window_id: int | None, startup_sessions: Iterable[Session] = ()) -> None:
         si = startup_sessions or create_sessions(get_options(), self.args, default_session=get_options().startup_session)
@@ -785,6 +807,9 @@ class Boss:
         assert window.child.pid is not None and window.child.child_fd is not None
         self.child_monitor.add_child(window.id, window.child.pid, window.child.child_fd, window.screen)
         self.window_id_map[window.id] = window
+        from .plugins import PluginEvent
+
+        self.plugin_manager.emit(PluginEvent('window_created', window.id, window.tab_id, window.title or ''))
 
     def _handle_remote_command(self, cmd: memoryview, window: Window | None = None, peer_id: int = 0) -> RCResponse:
         from .remote_control import is_cmd_allowed, parse_cmd, remote_control_allowed
@@ -1147,6 +1172,11 @@ class Boss:
         window = self.window_id_map.pop(window_id, None)
         if window is None:
             return
+        from .plugins import PluginEvent
+
+        event = PluginEvent('child_exited', window.id, window.tab_id, window.title or '', os.waitstatus_to_exitcode(exit_status))
+        self.plugin_manager.emit(event)
+        self.plugin_manager.emit(PluginEvent('window_closed', window.id, window.tab_id, window.title or ''))
         window.child_died, window.child_exit_status = child_died, exit_status
         window.child_exit_code = os.waitstatus_to_exitcode(exit_status)
         with self.suppress_focus_change_events():
@@ -2072,6 +2102,308 @@ class Boss:
                     return True
         return False
 
+    @ac('misc', 'Run a command registered by an enabled kitty plugin')
+    def plugin_command(self, plugin_id: str, command: str, *args: str) -> None:
+        try:
+            window = self.window_for_dispatch or self.active_window
+            self.plugin_manager.run_command(plugin_id, command, args, window.id if window is not None else None)
+        except Exception as err:
+            self.show_error('Plugin command failed', str(err))
+
+    @ac('misc', 'Review and enable a local kitty plugin')
+    def enable_plugin(self, plugin_id: str) -> None:
+        try:
+            info = self.plugin_manager.plugin_info(plugin_id)
+            capabilities = tuple(info['capabilities'])
+            message = (
+                f'Enable {info["name"]} v{info["version"]}?\n\n'
+                f'Source: {info["source"]}\n'
+                f'Upstream: {info["source_url"] or "not specified"}\n'
+                f'License: {info["license"] or "not specified"}\n'
+                f'Requested capabilities: {", ".join(capabilities) or "none"}\n\n'
+                'This runs the plugin Python code with your user privileges. '
+                'The capability list is not a sandbox. Enable only if you trust this exact source.'
+            )
+            self.confirm(
+                _wrap_plugin_confirmation(message),
+                self._complete_enable_plugin,
+                plugin_id,
+                info['content_digest'],
+                capabilities,
+                window=self.window_for_dispatch,
+                title='Trust plugin code?',
+            )
+        except Exception as err:
+            self.show_error('Could not review plugin', str(err))
+
+    @ac('misc', 'Install a bundled kitty plugin into the user configuration directory')
+    def install_bundled_plugin(self, plugin_id: str) -> None:
+        try:
+            self.plugin_manager.install_bundled_plugin(plugin_id)
+        except Exception as err:
+            self.show_error('Could not install bundled plugin', str(err))
+
+    @ac('misc', 'Browse and install plugins from a remote HTTPS catalog')
+    def browse_plugin_catalog(self) -> None:
+        url = self.plugin_manager.catalog_url()
+        if not url:
+            self.get_line(
+                'Enter the HTTPS URL of a kitty plugin catalog. The catalog metadata is not a code signature.',
+                self._complete_plugin_catalog_url,
+                window=self.window_for_dispatch,
+                prompt='Catalog URL: ',
+                window_title='Plugin catalog',
+            )
+            return
+        self._load_plugin_catalog(url)
+
+    def _complete_plugin_catalog_url(self, url: str) -> None:
+        if not url:
+            return
+        try:
+            self.plugin_manager.set_catalog_url(url)
+        except Exception as err:
+            self.show_error('Invalid plugin catalog URL', str(err))
+            return
+        self._load_plugin_catalog(url)
+
+    def _load_plugin_catalog(self, url: str) -> None:
+        self._run_plugin_network_task(
+            partial(self.plugin_manager.fetch_remote_catalog_data, url),
+            partial(self._finish_plugin_catalog_load, url, None),
+        )
+
+    def _run_plugin_network_task(self, task: Callable[[], Any], finished: Callable[[Exception | None, Any], None]) -> None:
+        result: SimpleQueue[tuple[Exception | None, Any]] = SimpleQueue()
+
+        def worker() -> None:
+            try:
+                result.put((None, task()))
+            except Exception as err:
+                result.put((err, None))
+
+        def poll(timer_id: int | None) -> None:
+            if self.shutting_down:
+                if timer_id is not None:
+                    remove_timer(timer_id)
+                return
+            try:
+                error, value = result.get_nowait()
+            except Empty:
+                return
+            if timer_id is not None:
+                remove_timer(timer_id)
+            finished(error, value)
+
+        add_timer(poll, 0.1, True)
+        Thread(target=worker, name='kitty-plugin-network', daemon=True).start()
+
+    def _finish_plugin_catalog_load(self, url: str, target_window_id: int | None, error: Exception | None, data: Any) -> None:
+        if error is not None:
+            self.show_error(f'Could not load plugin catalog: {url}', str(error))
+            return
+        try:
+            self.plugin_manager.load_remote_catalog(url, data)
+        except Exception as err:
+            self.show_error(f'Could not load plugin catalog: {url}', str(err))
+            return
+        if target_window_id is None:
+            self.command_palette()
+        else:
+            self._show_settings_overlay(self.window_id_map.get(target_window_id))
+
+    @ac('misc', 'Install and enable a reviewed plugin release from the configured remote catalog')
+    def install_catalog_plugin(self, plugin_id: str) -> None:
+        try:
+            info = self.plugin_manager.cached_remote_catalog_plugin(plugin_id)
+            if not info['compatible']:
+                raise ValueError(f'{plugin_id} does not support plugin API v{self.plugin_manager.api_version}')
+            message = (
+                f'Install and enable {info["name"]} v{info["version"]}?\n\n'
+                f'Upstream: {info["source_url"]}\n'
+                f'Release: {info["release_url"]}\n'
+                f'License: {info["license"]}\n'
+                f'Requested capabilities: {", ".join(info["capabilities"]) or "none"}\n'
+                f'Archive SHA-256: {info["archive_sha256"]}\n\n'
+                'This downloads the release and executes its Python code with your user privileges. '
+                'The capability list is not a sandbox. Continue only if you trust this source and exact archive.'
+            )
+            self.confirm(
+                _wrap_plugin_confirmation(message),
+                self._complete_install_catalog_plugin,
+                plugin_id,
+                info['archive_sha256'],
+                window=self.window_for_dispatch,
+                title='Trust and install plugin?',
+            )
+        except Exception as err:
+            self.show_error('Could not review catalog plugin', str(err))
+
+    def _complete_install_catalog_plugin(self, confirmed: bool, plugin_id: str, archive_sha256: str) -> None:
+        if not confirmed:
+            return
+        try:
+            info = self.plugin_manager.cached_remote_catalog_plugin(plugin_id)
+            if not info['compatible'] or info['archive_sha256'] != archive_sha256:
+                raise ValueError('Plugin catalog changed after the installation review; refresh and review again')
+        except Exception as err:
+            self.show_error('Could not install catalog plugin', str(err))
+            return
+        self._run_plugin_network_task(
+            partial(self.plugin_manager.download_remote_plugin_archive, info['release_url']),
+            partial(self._finish_install_catalog_plugin, plugin_id, archive_sha256),
+        )
+
+    def _finish_install_catalog_plugin(self, plugin_id: str, archive_sha256: str, error: Exception | None, archive_data: Any) -> None:
+        try:
+            if error is not None:
+                raise error
+            info = self.plugin_manager.install_remote_plugin(plugin_id, archive_sha256, archive_data)
+            self.plugin_manager.enable(plugin_id, frozenset(info['capabilities']), confirmed=True, expected_digest=info['content_digest'])
+        except Exception as err:
+            self.show_error('Could not install catalog plugin', str(err))
+
+    @ac('misc', 'Update an installed kitty plugin from the configured remote catalog')
+    def update_catalog_plugin(self, plugin_id: str) -> None:
+        try:
+            info = self.plugin_manager.cached_remote_catalog_plugin(plugin_id)
+            installed = self.plugin_manager.plugin_info(plugin_id)
+            if not info['compatible']:
+                raise ValueError(f'{plugin_id} does not support plugin API v{self.plugin_manager.api_version}')
+            if info['version'] == installed['version']:
+                raise ValueError(f'{plugin_id} is already at catalog version {info["version"]}')
+            message = (
+                f'Replace {installed["name"]} v{installed["version"]} with v{info["version"]}?\n\n'
+                f'Upstream: {info["source_url"]}\n'
+                f'Release: {info["release_url"]}\n'
+                f'License: {info["license"]}\n'
+                f'Requested capabilities: {", ".join(info["capabilities"]) or "none"}\n'
+                f'Archive SHA-256: {info["archive_sha256"]}\n\n'
+                'The installed version will be retained if download, validation, or replacement fails. '
+                'After a successful update, the plugin is disabled and must be reviewed and enabled again.'
+            )
+            self.confirm(
+                _wrap_plugin_confirmation(message),
+                self._complete_update_catalog_plugin,
+                plugin_id,
+                info['archive_sha256'],
+                window=self.window_for_dispatch,
+                title='Update plugin?',
+            )
+        except Exception as err:
+            self.show_error('Could not review plugin update', str(err))
+
+    def _complete_update_catalog_plugin(self, confirmed: bool, plugin_id: str, archive_sha256: str) -> None:
+        if not confirmed:
+            return
+        try:
+            info = self.plugin_manager.cached_remote_catalog_plugin(plugin_id)
+            if not info['compatible'] or info['archive_sha256'] != archive_sha256:
+                raise ValueError('Plugin catalog changed after the update review; refresh and review again')
+        except Exception as err:
+            self.show_error('Could not update catalog plugin', str(err))
+            return
+        self._run_plugin_network_task(
+            partial(self.plugin_manager.download_remote_plugin_archive, info['release_url']),
+            partial(self._finish_update_catalog_plugin, plugin_id, archive_sha256),
+        )
+
+    def _finish_update_catalog_plugin(self, plugin_id: str, archive_sha256: str, error: Exception | None, archive_data: Any) -> None:
+        try:
+            if error is not None:
+                raise error
+            self.plugin_manager.update_remote_plugin(plugin_id, archive_sha256, archive_data)
+        except Exception as err:
+            self.show_error('Could not update catalog plugin', str(err))
+
+    def _complete_enable_plugin(self, confirmed: bool, plugin_id: str, digest: str, capabilities: Sequence[str]) -> None:
+        if not confirmed:
+            return
+        try:
+            self.plugin_manager.enable(plugin_id, frozenset(capabilities), confirmed=True, expected_digest=digest)
+        except Exception as err:
+            self.show_error('Could not enable plugin', str(err))
+
+    @ac('misc', 'Disable a local kitty plugin')
+    def disable_plugin(self, plugin_id: str) -> None:
+        try:
+            self.plugin_manager.disable_plugin(plugin_id)
+        except Exception as err:
+            self.show_error('Could not disable plugin', str(err))
+
+    @ac('misc', 'Uninstall a kitty plugin and remove its saved settings')
+    def uninstall_plugin(self, plugin_id: str) -> None:
+        info = next((p for p in self.plugin_manager.available_plugins() if p['id'] == plugin_id), None)
+        source = info['source'] if info else str(self.plugin_manager.plugins_directory / plugin_id)
+        name = info['name'] if info else plugin_id
+        self.confirm(
+            _wrap_plugin_confirmation(f'Uninstall {name}?\n\nSource: {source}\n\nThis removes the plugin files, registry entry, and saved plugin settings.'),
+            self._complete_uninstall_plugin,
+            plugin_id,
+            window=self.window_for_dispatch,
+            title='Uninstall plugin?',
+        )
+
+    def _complete_uninstall_plugin(self, confirmed: bool, plugin_id: str) -> None:
+        if not confirmed:
+            return
+        try:
+            self.plugin_manager.uninstall_plugin(plugin_id)
+        except Exception as err:
+            self.show_error('Could not uninstall plugin', str(err))
+
+    def _read_plugin_screen(self, window_id: int) -> str:
+        window = self.window_id_map.get(window_id)
+        if window is None:
+            raise ValueError(f'No live kitty window with id {window_id}')
+        return window.as_text()
+
+    def _send_plugin_text(self, window_id: int, text: str) -> None:
+        window = self.window_id_map.get(window_id)
+        if window is None:
+            raise ValueError(f'No live kitty window with id {window_id}')
+        window.paste_text(text)
+
+    def _scroll_plugin_window(self, window_id: int, action: str) -> bool | None:
+        window = self.window_id_map.get(window_id)
+        if window is None:
+            raise ValueError(f'No live kitty window with id {window_id}')
+        return getattr(window, action)()
+
+    def _send_plugin_keys(self, window_id: int, keys: tuple[str, ...]) -> None:
+        window = self.window_id_map.get(window_id)
+        if window is None:
+            raise ValueError(f'No live kitty window with id {window_id}')
+        window.send_key(*keys)
+
+    def _inject_plugin_mappings(self) -> None:
+        from shlex import quote
+
+        from .options.utils import parse_map
+
+        opts = get_options()
+        keymap = opts.keyboard_modes[''].keymap
+        if getattr(self, '_plugin_keymap_options', None) is not opts:
+            self._plugin_keymap_options = opts
+            self._plugin_keymap_base = {trigger: defs[:] for trigger, defs in keymap.items()}
+        else:
+            keymap.clear()
+            keymap.update({trigger: defs[:] for trigger, defs in self._plugin_keymap_base.items()})
+        for plugin_id, key, command, args in self.plugin_manager.key_mappings():
+            definition = ' '.join((key, 'plugin_command', plugin_id, command, *(quote(x) for x in args)))
+            mapping = next(iter(parse_map(definition)), None)
+            if mapping is None:
+                self.plugin_manager.report_error(plugin_id, f'Invalid key mapping: {key!r}')
+                continue
+            if mapping.trigger in keymap:
+                self.plugin_manager.report_error(plugin_id, f'Key mapping {key!r} conflicts with an existing mapping')
+                continue
+            keymap[mapping.trigger] = [mapping]
+
+    def _refresh_plugin_mappings(self) -> None:
+        self._inject_plugin_mappings()
+        self.mappings.update_keymap()
+
     def user_menu_action(self, defn: str) -> None:
         "Callback from user actions in the macOS global menu bar or other menus"
         self.combine(defn)
@@ -2718,7 +3050,282 @@ class Boss:
         from kittens.command_palette.main import collect_keys_data
 
         data = collect_keys_data(get_options())
+        plugin_bindings: list[dict[str, str]] = []
+        for command in self.plugin_manager.commands():
+            plugin_bindings.append(
+                {
+                    'key': '',
+                    'action': 'plugin_command',
+                    'action_display': f'{command.name} ({command.plugin_id})',
+                    'definition': f'plugin_command {command.plugin_id} {command.name}',
+                    'help': command.description,
+                    'long_help': '',
+                }
+            )
+        for plugin_id, label, command in self.plugin_manager.ui_contributions():
+            plugin_bindings.append(
+                {
+                    'key': '',
+                    'action': 'plugin_command',
+                    'action_display': label,
+                    'definition': f'plugin_command {plugin_id} {command}',
+                    'help': f'Provided by plugin {plugin_id}',
+                    'long_help': '',
+                }
+            )
+        available_plugins = self.plugin_manager.available_plugins()
+        for plugin in available_plugins:
+            plugin_id = plugin['id']
+            description = (
+                f'{plugin["name"]} {plugin["version"]} from {plugin["source"]}; '
+                f'upstream: {plugin["source_url"] or "not specified"}; '
+                f'capabilities: {", ".join(plugin["capabilities"]) or "none"}'
+            )
+            if plugin['enabled'] and not plugin['approval_required']:
+                action, verb = 'disable_plugin', 'Disable'
+            else:
+                action, verb = 'enable_plugin', 'Review and enable'
+            plugin_bindings.append(
+                {
+                    'key': '',
+                    'action': action,
+                    'action_display': f'{verb} plugin: {plugin["name"]}',
+                    'definition': f'{action} {plugin_id}',
+                    'help': description,
+                    'long_help': plugin['error'],
+                }
+            )
+            plugin_bindings.append(
+                {
+                    'key': '',
+                    'action': 'uninstall_plugin',
+                    'action_display': f'Uninstall plugin: {plugin["name"]}',
+                    'definition': f'uninstall_plugin {plugin_id}',
+                    'help': f'Remove {plugin["source"]} and its saved settings',
+                    'long_help': '',
+                }
+            )
+        installed_plugin_ids = {plugin['id'] for plugin in available_plugins}
+        for plugin in self.plugin_manager.bundled_plugins():
+            if plugin['id'] in installed_plugin_ids:
+                continue
+            plugin_bindings.append(
+                {
+                    'key': '',
+                    'action': 'install_bundled_plugin',
+                    'action_display': f'Install bundled plugin: {plugin["name"]}',
+                    'definition': f'install_bundled_plugin {plugin["id"]}',
+                    'help': (
+                        f'{plugin["description"]} Version {plugin["version"]}; source: {plugin["source_url"]}; '
+                        f'license: {plugin["license"]}; capabilities: {", ".join(plugin["capabilities"]) or "none"}'
+                    ),
+                    'long_help': 'Installs the package files. Review and enable it separately before its Python code runs.',
+                }
+            )
+        plugin_bindings.append(
+            {
+                'key': '',
+                'action': 'browse_plugin_catalog',
+                'action_display': 'Browse remote plugin catalog',
+                'definition': 'browse_plugin_catalog',
+                'help': 'Fetch a catalog over HTTPS and review versioned releases before installing.',
+                'long_help': '',
+            }
+        )
+        for plugin in self.plugin_manager.remote_catalog_entries():
+            if not plugin['compatible']:
+                continue
+            if plugin['id'] in installed_plugin_ids:
+                installed = next((p for p in available_plugins if p['id'] == plugin['id']), None)
+                if installed is None or installed['version'] == plugin['version']:
+                    continue
+                plugin_bindings.append(
+                    {
+                        'key': '',
+                        'action': 'update_catalog_plugin',
+                        'action_display': f'Update plugin: {plugin["name"]} ({installed["version"]} → {plugin["version"]})',
+                        'definition': f'update_catalog_plugin {plugin["id"]}',
+                        'help': (
+                            f'Update from {plugin["source_url"]}; license: {plugin["license"]}; capabilities: {", ".join(plugin["capabilities"]) or "none"}'
+                        ),
+                        'long_help': 'The update is staged and checked before replacement. The updated plugin needs a fresh review before it can run.',
+                    }
+                )
+                continue
+            plugin_bindings.append(
+                {
+                    'key': '',
+                    'action': 'install_catalog_plugin',
+                    'action_display': f'Install catalog plugin: {plugin["name"]}',
+                    'definition': f'install_catalog_plugin {plugin["id"]}',
+                    'help': (
+                        f'{plugin["description"]} Version {plugin["version"]}; source: {plugin["source_url"]}; '
+                        f'license: {plugin["license"]}; capabilities: {", ".join(plugin["capabilities"]) or "none"}'
+                    ),
+                    'long_help': '',
+                }
+            )
+        if plugin_bindings:
+            data['modes'].setdefault('', {}).setdefault('Plugins', []).extend(plugin_bindings)
+            data['category_order'].setdefault('', []).append('Plugins')
         self.run_kitten_with_metadata('command-palette', input_data=json.dumps(data), window=self.window_for_dispatch)
+
+    @ac('misc', 'Browse and edit kitty configuration settings in an overlay')
+    def open_settings(self) -> None:
+        self._show_settings_overlay(self.window_for_dispatch)
+
+    def _show_settings_overlay(self, window: Window | None) -> None:
+        from kitty.settings import settings_ui_data
+
+        data = settings_ui_data(get_options().config_paths)
+        data['plugin_pages'] = self.plugin_manager.settings_pages()
+        data['plugin_errors'] = self.plugin_manager.errors.copy()
+        settings = data['settings']
+
+        def add_action(name: str, value: str, action: str, help_text: str, *, plugin_id: str = '', source: str = '') -> None:
+            settings.append(
+                {
+                    'name': name,
+                    'group': ('Plugins',) if plugin_id else ('Appearance',),
+                    'type': 'action',
+                    'value_type': 'action',
+                    'default': '',
+                    'choices': (),
+                    'help': help_text,
+                    'source': source,
+                    'restart_required': False,
+                    'multiple': False,
+                    'current': [value],
+                    'plugin_id': plugin_id,
+                    'action': action,
+                }
+            )
+
+        add_action(
+            'Refresh plugin catalog',
+            'Fetch catalog',
+            'refresh_catalog',
+            'Fetch the configured HTTPS catalog and show installable plugins here.',
+            plugin_id='catalog',
+            source=self.plugin_manager.catalog_url(),
+        )
+        add_action('Preview themes', 'Open theme picker', 'preview_themes', 'Open kitty’s theme picker to preview and apply themes.')
+        add_action('Preview fonts', 'Open font picker', 'preview_fonts', 'Open kitty’s font picker with live font previews.')
+
+        available = self.plugin_manager.available_plugins()
+        installed = {item['id']: item for item in available}
+        for plugin in available:
+            enabled = plugin['enabled'] and not plugin['approval_required']
+            action = 'disable_plugin' if enabled else 'enable_plugin'
+            verb = 'Disable' if enabled else 'Review and enable'
+            add_action(
+                f'{verb} plugin: {plugin["name"]}',
+                f'{plugin["version"]} · {plugin["source"]}',
+                action,
+                f'Upstream: {plugin.get("source_url", "")}; license: {plugin.get("license", "")}; '
+                f'capabilities: {", ".join(plugin["capabilities"]) or "none"}; {plugin.get("error", "")}',
+                plugin_id=plugin['id'],
+                source=plugin['source'],
+            )
+            add_action(
+                f'Uninstall plugin: {plugin["name"]}',
+                'Remove plugin',
+                'uninstall_plugin',
+                f'Remove plugin files and saved settings. Source: {plugin["source"]}',
+                plugin_id=plugin['id'],
+                source=plugin['source'],
+            )
+
+        for plugin in self.plugin_manager.bundled_plugins():
+            if plugin['id'] not in installed:
+                add_action(
+                    f'Install bundled plugin: {plugin["name"]}',
+                    plugin['version'],
+                    'install_bundled_plugin',
+                    f'{plugin["description"]} Source: {plugin["source_url"]}; license: {plugin["license"]}; '
+                    f'capabilities: {", ".join(plugin["capabilities"]) or "none"}. Installation copies code; review is required before enabling.',
+                    plugin_id=plugin['id'],
+                    source=plugin['source_url'],
+                )
+
+        for plugin in self.plugin_manager.remote_catalog_entries():
+            if not plugin['compatible']:
+                continue
+            current = installed.get(plugin['id'])
+            if current is None:
+                value, action = plugin['version'], 'install_catalog_plugin'
+            elif current['version'] != plugin['version']:
+                value, action = f'{current["version"]} → {plugin["version"]}', 'update_catalog_plugin'
+            else:
+                value, action = f'Installed v{current["version"]}', ''
+            add_action(
+                f'Catalog plugin: {plugin["name"]}',
+                value,
+                action,
+                f'{plugin["description"]} Upstream: {plugin["source_url"]}; release: {plugin["release_url"]}; '
+                f'license: {plugin["license"]}; capabilities: {", ".join(plugin["capabilities"]) or "none"}; '
+                f'SHA-256: {plugin["archive_sha256"]}',
+                plugin_id=plugin['id'],
+                source=plugin['source_url'],
+            )
+        self.run_kitten_with_metadata('settings', input_data=json.dumps(data), window=window or self.window_for_dispatch)
+
+    def settings_plugin_action(self, action: str, plugin_id: str, target_window_id: int) -> None:
+        window = self.window_id_map.get(target_window_id)
+        previous_window = self.window_for_dispatch
+        self.window_for_dispatch = window
+        try:
+            if action == 'preview_themes':
+                self.run_kitten_with_metadata('themes', window=window)
+            elif action == 'preview_fonts':
+                self.run_kitten_with_metadata('choose-fonts', window=window)
+            elif action == 'refresh_catalog':
+                self.refresh_plugin_catalog_in_settings(target_window_id)
+            elif action == 'install_bundled_plugin':
+                self.install_bundled_plugin(plugin_id)
+            elif action == 'enable_plugin':
+                self.enable_plugin(plugin_id)
+            elif action == 'disable_plugin':
+                self.disable_plugin(plugin_id)
+            elif action == 'uninstall_plugin':
+                self.uninstall_plugin(plugin_id)
+            elif action == 'install_catalog_plugin':
+                self.install_catalog_plugin(plugin_id)
+            elif action == 'update_catalog_plugin':
+                self.update_catalog_plugin(plugin_id)
+            else:
+                raise ValueError(f'Unknown settings plugin action: {action!r}')
+        finally:
+            self.window_for_dispatch = previous_window
+
+    def refresh_plugin_catalog_in_settings(self, target_window_id: int) -> None:
+        url = self.plugin_manager.catalog_url()
+        if not url:
+            self.get_line(
+                'Enter the HTTPS URL of a kitty plugin catalog. Catalog metadata is not a code signature.',
+                lambda value: self._complete_settings_catalog_url(value, target_window_id),
+                window=self.window_id_map.get(target_window_id),
+                prompt='Catalog URL: ',
+                window_title='Plugin catalog',
+            )
+            return
+        self._fetch_plugin_catalog_for_settings(url, target_window_id)
+
+    def _complete_settings_catalog_url(self, url: str, target_window_id: int) -> None:
+        if not url:
+            return
+        try:
+            self.plugin_manager.set_catalog_url(url)
+        except Exception as err:
+            self.show_error('Invalid plugin catalog URL', str(err))
+            return
+        self._fetch_plugin_catalog_for_settings(url, target_window_id)
+
+    def _fetch_plugin_catalog_for_settings(self, url: str, target_window_id: int) -> None:
+        self._run_plugin_network_task(
+            partial(self.plugin_manager.fetch_remote_catalog_data, url),
+            partial(self._finish_plugin_catalog_load, url, target_window_id),
+        )
 
     @ac(
         'tab',
@@ -2982,6 +3589,7 @@ class Boss:
 
     def destroy(self) -> None:
         self.shutting_down = True
+        self.plugin_manager.shutdown()
         self.child_monitor.shutdown_monitor()
         self.set_update_check_process()
         self.update_check_process = None
@@ -3503,6 +4111,7 @@ class Boss:
             from .fast_data_types import cocoa_clear_global_shortcuts
 
             cocoa_clear_global_shortcuts()
+        self._inject_plugin_mappings()
         self.mappings.update_keymap()
         if is_macos:
             from .fast_data_types import cocoa_recreate_global_menu

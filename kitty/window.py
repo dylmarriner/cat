@@ -1559,6 +1559,12 @@ class Window:
         self.screen.focus_changed(focused)
         if focused:
             self.last_focused_at = monotonic()
+            boss = get_boss()
+            plugin_manager = getattr(boss, 'plugin_manager', None)
+            if plugin_manager is not None:
+                from .plugins import PluginEvent
+
+                plugin_manager.emit(PluginEvent('window_focused', self.id, self.tab_id, self.title or ''))
             update_ime_position_for_window(self.id, False, 1)
             changed = self.needs_attention
             self.needs_attention = False

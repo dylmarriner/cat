@@ -591,6 +591,8 @@ def kitten_clis() -> None:
                 print(''.join(ac.as_go_code('ans.ArgCompleter', ' = ')))
             if not kcd:
                 print('specialize_command(ans)')
+            elif not gopts and ac is None and not has_underscore:
+                print('_ = ans')
             if has_underscore:
                 print('clone := root.AddClone(ans.Group, ans)')
                 print('clone.Hidden = false')

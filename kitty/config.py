@@ -164,6 +164,7 @@ def parse_config(
 
 
 effective_config_lines: list[str] = []
+effective_config_sources: dict[str, str] = {}
 
 
 def load_config(*paths: str, overrides: Iterable[str] | None = None, accumulate_bad_lines: list[BadLine] | None = None) -> Options:
@@ -171,10 +172,14 @@ def load_config(*paths: str, overrides: Iterable[str] | None = None, accumulate_
     from .options.types import secret_options
 
     del effective_config_lines[:]
+    effective_config_sources.clear()
 
     def add_effective_config_line(key: str, line: str) -> None:
         if key not in secret_options:
             effective_config_lines.append(line)
+            from .conf.utils import currently_parsing
+
+            effective_config_sources[key.removeprefix('+')] = currently_parsing.file
 
     overrides = tuple(overrides) if overrides is not None else ()
 

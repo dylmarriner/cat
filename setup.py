@@ -24,6 +24,9 @@ from pathlib import Path
 from typing import Any, Callable, Dict, FrozenSet, Iterable, List, NamedTuple, Optional, Sequence, Set, Tuple, Union, cast
 
 src_base = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, src_base)
+from tools.package_utils import package_source_ignore  # noqa: E402
+
 glfw_base = os.path.join(src_base, 'glfw')
 setattr(sys, 'running_from_setup', True)
 
@@ -2132,13 +2135,8 @@ def package(args: Options, bundle_type: str, do_build_all: bool = True) -> None:
     shutil.copy2('logo/beam-cursor@2x.png', os.path.join(libdir, 'logo'))
     shutil.copytree('shell-integration', os.path.join(libdir, 'shell-integration'), dirs_exist_ok=True)
     shutil.copytree('fonts', os.path.join(libdir, 'fonts'), dirs_exist_ok=True)
-    allowed_extensions = frozenset('py slang pipeline glsl so'.split())
-
-    def src_ignore(parent: str, entries: Iterable[str]) -> List[str]:
-        return [x for x in entries if '.' in x and x.rpartition('.')[2] not in allowed_extensions]
-
-    shutil.copytree('kitty', os.path.join(libdir, 'kitty'), ignore=src_ignore)
-    shutil.copytree('kittens', os.path.join(libdir, 'kittens'), ignore=src_ignore)
+    shutil.copytree('kitty', os.path.join(libdir, 'kitty'), ignore=package_source_ignore)
+    shutil.copytree('kittens', os.path.join(libdir, 'kittens'), ignore=package_source_ignore)
     if for_freeze:
         shutil.copytree('kitty_tests', os.path.join(libdir, 'kitty_tests'))
 

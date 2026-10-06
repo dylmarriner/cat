@@ -1,0 +1,11 @@
+{
+  "id": "smart-scroll",
+  "name": "Smart scroll",
+  "version": "1.0.0",
+  "api_versions": [1],
+  "entry_point": "main.py",
+  "capabilities": ["commands", "key_mappings", "scroll", "terminal"],
+  "source_url": "https://github.com/yurikhan/kitty-smart-scroll",
+  "license": "GPL-3.0-or-later",
+  "settings": []
+}

@@ -1029,6 +1029,8 @@ defaults.map = [
     KeyDefinition(trigger=SingleKey(mods=256, key=117), options=KeyMapOptions(when_focus_on='', new_mode='', mode='', on_unknown='beep', on_action='keep', timeout=None, allow_fallback=(KeyFallbackType.shifted, KeyFallbackType.alternate)), definition='kitten unicode_input'),
     # edit_config_file
     KeyDefinition(trigger=SingleKey(mods=256, key=57365), definition='edit_config_file'),
+    # open_settings
+    KeyDefinition(trigger=SingleKey(mods=256, key=57367), definition='open_settings'),
     # kitty_shell
     KeyDefinition(trigger=SingleKey(mods=256, key=57344), definition='kitty_shell window'),
     # increase_background_opacity

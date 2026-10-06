@@ -313,9 +313,21 @@ Kittens created by kitty users
     Allows you to navigate seamlessly between vim and kitty splits using a
     consistent set of hotkeys.
 
+`kitty-scrollback.nvim <https://github.com/mikesmithgh/kitty-scrollback.nvim>`_
+    A Neovim integration and custom kitten for searching, copying and running
+    commands from kitty scrollback. It requires Neovim 0.10 or newer, kitty
+    0.43 or newer, shell integration, and remote control access to kitty. It is
+    licensed under Apache-2.0.
+
+`kitty-navigator.nvim <https://github.com/MunsMan/kitty-navigator.nvim>`_
+    A Neovim plugin paired with two custom kittens for navigation between
+    Neovim splits and kitty windows. It requires remote control access and
+    documents copying its Python kittens into the kitty config directory.
+
 `smart-scroll <https://github.com/yurikhan/kitty-smart-scroll>`_
     Makes the kitty scroll bindings work in full screen applications
-
+    such as editors by routing keys to the active application. It is licensed
+    under GPL-3.0-or-later.
 `kitty-tab-switcher <https://github.com/OsiPog/kitty-tab-switcher>`__
     Fuzzy finder for kitty tabs with previews
 

@@ -23,6 +23,7 @@ import (
 	"github.com/kovidgoyal/kitty/kittens/quick_access_terminal"
 	"github.com/kovidgoyal/kitty/kittens/remote_file"
 	"github.com/kovidgoyal/kitty/kittens/resize_window"
+	"github.com/kovidgoyal/kitty/kittens/settings"
 	"github.com/kovidgoyal/kitty/kittens/show_key"
 	"github.com/kovidgoyal/kitty/kittens/ssh"
 	"github.com/kovidgoyal/kitty/kittens/themes"
@@ -113,6 +114,8 @@ func KittyToolEntryPoints(root *cli.Command) {
 	choose_files.EntryPoint(root)
 	// command-palette
 	command_palette.EntryPoint(root)
+	// settings
+	settings.EntryPoint(root)
 	// query-terminal
 	query_terminal.EntryPoint(root)
 	// __pytest__

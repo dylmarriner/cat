@@ -16,7 +16,7 @@ override OPTS=
 endif
 
 # You can set these variables from the command line.
-SPHINXOPTS    = -n -q -j auto -T $(FAIL_WARN) $(OPTS)
+SPHINXOPTS    = -n -q -j 2 -T $(FAIL_WARN) $(OPTS)
 SPHINXBUILD   = sphinx-build
 SPHINXAUTOBUILD = sphinx-autobuild
 SPHINXPROJ    = kitty

@@ -4582,6 +4582,7 @@ map(
     'Edit config file',
     'edit_config_file kitty_mod+f2 edit_config_file',
 )
+map('Open settings', 'open_settings kitty_mod+f4 open_settings')
 map(
     'Edit config file',
     'edit_config_file cmd+, edit_config_file',

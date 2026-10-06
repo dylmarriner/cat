@@ -788,7 +788,7 @@ def setup_man_pages() -> None:
     base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     for x in glob.glob(os.path.join(base, 'docs/kittens/*.rst')):
         kn = os.path.basename(x).rpartition('.')[0]
-        if kn in ('custom', 'developing-builtin-kittens'):
+        if kn in ('custom', 'developing-builtin-kittens', 'plugins'):
             continue
         cd = get_kitten_cli_docs(kn) or {}
         khn = kn.replace('_', '-')

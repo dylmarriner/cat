@@ -12,6 +12,8 @@ Extend with kittens
    kittens/unicode_input
    kittens/themes
    kittens/choose-fonts
+   kittens/settings
+   kittens/plugins
    kittens/hints
    kittens/command-palette
    kittens/quick-access-terminal

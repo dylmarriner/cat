@@ -1,0 +1,67 @@
+name: Publish smart-scroll plugin
+on:
+  push:
+    tags:
+      - 'plugin-smart-scroll-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build kitty
+        run: python .github/workflows/ci.py build
+
+      - name: Test plugin host and bundled package
+        run: ./test.py --module plugins
+
+      - name: Test release package round trip
+        run: ./test.py --module plugin_release
+
+      - name: Build reproducible release archive and catalog
+        run: python tools/plugin_release.py --output-directory dist/plugins
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/plugins/smart-scroll.zip \
+            dist/plugins/catalog.json \
+            --title "$GITHUB_REF_NAME" \
+            --notes 'Versioned smart-scroll package and kitty plugin catalog index.' \
+            --latest=false \
+            --verify-tag
+
+      - name: Publish stable catalog index
+        run: |
+          if git ls-remote --exit-code --heads origin plugin-catalog >/dev/null; then
+            git fetch origin plugin-catalog
+            git checkout -B plugin-catalog FETCH_HEAD
+          else
+            git checkout --orphan plugin-catalog
+            git rm -rf .
+          fi
+          cp dist/plugins/catalog.json catalog.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add catalog.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Publish smart-scroll $GITHUB_REF_NAME catalog"
+            git push origin plugin-catalog
+          fi

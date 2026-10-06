@@ -195,8 +195,8 @@ def test_kitty() -> None:
 def package_kitty() -> None:
     set_slangc()
     python = 'python3' if is_macos else 'python'
-    run(f'{python} setup.py linux-package --update-check-interval=0 --verbose')
     run('make FAIL_WARN=1 docs')
+    run(f'{python} setup.py linux-package --update-check-interval=0 --verbose')
     if is_macos:
         run('python3 setup.py kitty.app --update-check-interval=0 --verbose')
         run('kitty.app/Contents/MacOS/kitty +runpy "from kitty.constants import *; print(kitty_exe())"')

@@ -41,6 +41,24 @@ should see a 15-35% improvement depending on workload. Some details:
 
 #. Cache HarfBuzz results for repeated short runs (≤32 cells) so redraws of the same on-screen text are not reshaped
 
+Interactive settings
+~~~~~~~~~~~~~~~~~~~~
+
+Open a searchable settings overlay with :kbd:`kitty_mod+F4`. It edits settings
+using kitty's option definitions, validates them with the normal config parser,
+and reloads kitty after saving. Advanced directives remain editable in the
+existing text editor.
+
+Versioned plugin host
+~~~~~~~~~~~~~~~~~~~~~
+
+Add a versioned Python extension API for explicitly enabled plugins, with
+capability grants, commands, key mappings, settings pages, UI contributions,
+event hooks, and cleanup on disable. Changes to approved plugin source require
+re-approval. The HTTPS catalog verifies pinned release hashes, asks for trust
+confirmation before installing code, and stages updates with rollback on
+failure. Catalog downloads run outside kitty's UI thread.
+
 
 Vertical tabs [0.48]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
