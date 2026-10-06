@@ -1,8 +1,12 @@
-name: Publish smart-scroll plugin
+name: Publish kitty plugin
 on:
   push:
     tags:
-      - 'plugin-smart-scroll-v*'
+      - 'plugin-*-v*'
+
+concurrency:
+  group: plugin-catalog
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -33,18 +37,28 @@ jobs:
       - name: Test release package round trip
         run: ./test.py --module plugin_release
 
+      - name: Fetch current plugin catalog
+        run: |
+          mkdir -p dist/plugins
+          if git ls-remote --exit-code --heads origin plugin-catalog >/dev/null; then
+            git fetch origin plugin-catalog
+            git show FETCH_HEAD:catalog.json > dist/plugins/current-catalog.json
+          else
+            printf '{"schema_version":1,"plugins":[]}\n' > dist/plugins/current-catalog.json
+          fi
+
       - name: Build reproducible release archive and catalog
-        run: python tools/plugin_release.py --output-directory dist/plugins
+        run: python tools/plugin_release.py --merge-catalog dist/plugins/current-catalog.json --output-directory dist/plugins
 
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
-            dist/plugins/smart-scroll.zip \
+            dist/plugins/*.zip \
             dist/plugins/catalog.json \
             --title "$GITHUB_REF_NAME" \
-            --notes 'Versioned smart-scroll package and kitty plugin catalog index.' \
+            --notes 'Versioned kitty plugin package and current kitty plugin catalog index.' \
             --latest=false \
             --verify-tag
 
@@ -62,6 +76,6 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add catalog.json
           if ! git diff --cached --quiet; then
-            git commit -m "Publish smart-scroll $GITHUB_REF_NAME catalog"
+            git commit -m "Publish plugin $GITHUB_REF_NAME catalog"
             git push origin plugin-catalog
           fi

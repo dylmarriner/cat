@@ -71,10 +71,10 @@ reported in kitty's log without preventing other enabled plugins from loading.
 
 Remote catalog browsing, installation, updates, and local plugin management
 are available in the :doc:`settings overlay </kittens/settings>` as well as
-the command palette. The first catalog refresh asks for a catalog HTTPS URL;
-kitty stores that URL under the plugin configuration
-directory and fetches it again each time the catalog is opened. A remote index
-uses schema version 1 and has this shape::
+the command palette. New installations use the maintained kitty catalog; users
+can set a different HTTPS catalog URL, which kitty stores under the plugin
+configuration directory. Kitty fetches the index each time the catalog is
+opened. A remote index uses schema version 1 and has this shape::
 
     {
       "schema_version": 1,
@@ -120,8 +120,8 @@ The catalog pins each package digest and checks it against the package files
 and manifest before listing or installing it. Choose **Install bundled
 plugin** in kitty's command palette, then review and enable it. Installation
 copies the package without executing it; enabling shows the upstream source,
-license, and capability confirmation. A maintained public remote catalog and
-hosted release artifacts have not been published by this checkout.
+license, and capability confirmation. The published remote catalog also lists
+the versioned Smart Scroll release.
 
 Upstream integration candidates
 -------------------------------
@@ -196,6 +196,8 @@ The ``plugin-catalog`` branch serves the current index at
 ``https://raw.githubusercontent.com/dylmarriner/cat/plugin-catalog/catalog.json``.
 New installations use this catalog by default; a user can replace the URL with
 another HTTPS catalog. The release workflow tests and packages the bundled
-smart-scroll port for tags matching ``plugin-smart-scroll-v<version>``, uploads
-the archive and a catalog snapshot to the versioned release, and updates the
-dedicated catalog branch.
+plugin selected by a tag matching ``plugin-<plugin-id>-v<version>``. It uploads
+the archive and merged catalog to the versioned release, then updates the
+dedicated catalog branch without removing entries for other plugins. Releases
+are serialized so concurrent plugin releases cannot overwrite one another's
+catalog updates.

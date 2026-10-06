@@ -87,6 +87,7 @@ class TestPlugins(unittest.TestCase):
             self.assertTrue((package_dir / 'catalog.json').is_file())
             self.assertTrue((package_dir / 'smart-scroll' / 'plugin.json').is_file())
             self.assertTrue((package_dir / 'smart-scroll' / 'README.rst').is_file())
+            self.assertTrue((package_dir / 'smart-scroll' / 'LICENSE').is_file())
             with patch.object(PluginManager, 'bundled_plugins_directory', return_value=package_dir):
                 self.assertEqual(tuple(x['id'] for x in PluginManager(td).bundled_plugins()), ('smart-scroll',))
 
