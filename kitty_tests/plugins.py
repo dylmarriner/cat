@@ -27,6 +27,21 @@ class TestPlugins(unittest.TestCase):
             manager = PluginManager(td)
             self.assertEqual(manager.catalog_url(), 'https://raw.githubusercontent.com/dylmarriner/cat/plugin-catalog/catalog.json')
 
+    def test_boss_plugin_chooser_returns_selected_value(self) -> None:
+        from kitty.boss import Boss
+
+        class FakeBoss:
+            def choose_entry(self, title, entries, callback):
+                self.args = title, list(entries)
+                self.callback = callback
+
+        fake, results = FakeBoss(), []
+        Boss._choose_plugin_entry(fake, 1, 'Pick', (('7', 'work'), ('9', 'play')), results.append)  # type: ignore[arg-type]
+        self.assertEqual(fake.args, ('Pick', [('7', 'work'), ('9', 'play')]))
+        fake.callback('9')
+        fake.callback(None)
+        self.assertEqual(results, ['9', ''])
+
     def test_https_redirect_handler_rejects_insecure_targets_before_following(self) -> None:
         handler = _HTTPSRedirectHandler()
         request = Request('https://example.org/catalog.json')

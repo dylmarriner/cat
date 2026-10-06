@@ -2139,16 +2139,7 @@ class Boss:
         self.get_line(title, callback, window=self.window_id_map.get(window_id), initial_value=initial, prompt='> ', window_title=title)
 
     def _choose_plugin_entry(self, window_id: int | None, title: str, entries: tuple[tuple[str, str], ...], callback: Callable[[str], None]) -> None:
-        window = self.window_id_map.get(window_id)
-        by_choice = {f'{index}\t{label}': value for index, (value, label) in enumerate(entries)}
-        choices = tuple(by_choice)
-        self.choose(
-            title,
-            lambda choice: callback(by_choice.get(choice, '')),
-            *choices,
-            window=window,
-            title=title,
-        )
+        self.choose_entry(title, entries, lambda choice: callback(choice if isinstance(choice, str) else ''))
 
     def _plugin_window_info(self, window_id: int) -> dict[str, Any]:
         window = self.window_id_map.get(window_id)
