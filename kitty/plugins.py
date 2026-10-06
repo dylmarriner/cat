@@ -27,6 +27,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from .config import atomic_save
 
 PLUGIN_API_VERSION = 1
+DEFAULT_PLUGIN_CATALOG_URL = 'https://raw.githubusercontent.com/dylmarriner/cat/plugin-catalog/catalog.json'
 PLUGIN_ID_PATTERN = re.compile(r'^[a-z][a-z0-9-]{1,62}[a-z0-9]$')
 PLUGIN_NAME_PATTERN = re.compile(r'^[a-z][a-z0-9_-]{0,63}$')
 LICENSE_PATTERN = re.compile(r'^[A-Za-z0-9.+-]{1,128}$')
@@ -367,7 +368,7 @@ class PluginManager:
         try:
             return (self.plugins_directory / 'catalog-url').read_text(encoding='utf-8').strip()
         except FileNotFoundError:
-            return ''
+            return DEFAULT_PLUGIN_CATALOG_URL
 
     def set_catalog_url(self, url: str) -> None:
         url = url.strip()

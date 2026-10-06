@@ -187,20 +187,15 @@ theme browser in settings, not an executable plugin source. Per-theme license
 metadata varies, so any redistribution must preserve and check each entry's
 license and attribution.
 
-Catalog publishing status
--------------------------
+Published catalog
+-----------------
 
-The :file:`.github/workflows/plugin-release.yml` workflow is present but has
-not been run by this checkout. It tests and packages the bundled smart-scroll
-port when a maintainer pushes a tag matching
-``plugin-smart-scroll-v<version>``. It publishes the ZIP and a catalog snapshot
-as assets on that versioned GitHub release, then updates the dedicated
-``plugin-catalog`` branch with the current index. Configure the catalog URL as
-``https://raw.githubusercontent.com/OWNER/REPOSITORY/plugin-catalog/catalog.json``
-(using the actual public repository path). This keeps catalog updates
-independent from the repository's product releases. No hosted release or public
-catalog has been verified for this checkout. Until a maintainer pushes that tag
-and the workflow succeeds, the bundled catalog is the only available catalog;
-ordinary branch builds do not publish anything. Public catalog fetching
-requires the repository to be publicly readable, and the index branch must
-allow the GitHub Actions token to push.
+The public ``plugin-smart-scroll-v1.0.0`` release is published from
+``https://github.com/dylmarriner/cat/releases/tag/plugin-smart-scroll-v1.0.0``.
+The ``plugin-catalog`` branch serves the current index at
+``https://raw.githubusercontent.com/dylmarriner/cat/plugin-catalog/catalog.json``.
+New installations use this catalog by default; a user can replace the URL with
+another HTTPS catalog. The release workflow tests and packages the bundled
+smart-scroll port for tags matching ``plugin-smart-scroll-v<version>``, uploads
+the archive and a catalog snapshot to the versioned release, and updates the
+dedicated catalog branch.

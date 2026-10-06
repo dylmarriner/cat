@@ -20,6 +20,11 @@ ALL_CAPABILITIES = frozenset({'commands', 'events', 'settings', 'key_mappings', 
 
 
 class TestPlugins(unittest.TestCase):
+    def test_default_catalog_points_to_published_cat_index(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            manager = PluginManager(td)
+            self.assertEqual(manager.catalog_url(), 'https://raw.githubusercontent.com/dylmarriner/cat/plugin-catalog/catalog.json')
+
     def test_https_redirect_handler_rejects_insecure_targets_before_following(self) -> None:
         handler = _HTTPSRedirectHandler()
         request = Request('https://example.org/catalog.json')
