@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "plugins": [
+    {
+      "id": "smart-scroll",
+      "name": "Smart scroll",
+      "version": "1.0.0",
+      "description": "Scroll kitty history normally and forward the same keys to alternate-screen applications.",
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "commands",
+        "key_mappings",
+        "scroll",
+        "terminal"
+      ],
+      "source_url": "https://github.com/yurikhan/kitty-smart-scroll",
+      "license": "GPL-3.0-or-later",
+      "release_url": "https://github.com/dylmarriner/cat/releases/download/plugin-smart-scroll-v1.0.0/smart-scroll.zip",
+      "archive_sha256": "9e6cb9be1dc82c364f0b701f245700aa40c33acc94d0790b6769c794e293b274"
+    }
+  ]
+}
