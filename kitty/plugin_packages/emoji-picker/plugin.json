@@ -1,0 +1,19 @@
+{
+  "id": "emoji-picker",
+  "name": "Emoji picker",
+  "version": "1.0.0",
+  "api_versions": [
+    1
+  ],
+  "entry_point": "main.py",
+  "capabilities": [
+    "commands",
+    "launch",
+    "terminal",
+    "ui",
+    "window"
+  ],
+  "source_url": "https://github.com/dylmarriner/cat",
+  "license": "GPL-3.0-or-later",
+  "settings": []
+}

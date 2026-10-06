@@ -95,6 +95,7 @@ from .fast_data_types import (
     current_focused_os_window_id,
     current_os_window,
     destroy_global_data,
+    fire_plugin_shader_signal,
     focus_os_window,
     get_boss,
     get_options,
@@ -127,6 +128,8 @@ from .fast_data_types import (
     set_os_window_chrome,
     set_os_window_size,
     set_os_window_title,
+    set_plugin_shader_channel_visible,
+    set_plugin_shader_param,
     set_tab_being_dragged,
     set_window_being_dragged,
     start_drag_with_data,
@@ -485,7 +488,29 @@ class Boss:
             self._send_plugin_text,
             self._scroll_plugin_window,
             self._send_plugin_keys,
+            prompt_handler=self._prompt_plugin,
+            choice_handler=self._choose_plugin_entry,
+            clipboard_reader=get_clipboard_string,
+            clipboard_writer=set_clipboard_string,
+            window_reader=self._plugin_window_info,
+            tabs_reader=self._plugin_tabs,
+            tab_focuser=self._focus_plugin_tab,
+            launcher=self._launch_plugin_command,
+            url_opener=self._open_plugin_url,
+            notifier=self._plugin_notify,
+            tab_title_setter=self._set_plugin_tab_title,
+            color_setter=self._set_plugin_colors,
+            opacity_setter=self._set_plugin_opacity,
+            timer_adder=add_timer,
+            timer_remover=remove_timer,
+            background_runner=self._run_plugin_network_task,
+            shader_pipelines_setter=self._set_plugin_shader_pipelines,
+            shader_param_setter=lambda idx, values: set_plugin_shader_param(idx, *values),
+            shader_signal_firer=fire_plugin_shader_signal,
+            shader_visibility_setter=set_plugin_shader_channel_visible,
         )
+        self._plugin_shader_recompile_timer: int | None = None
+        self._plugin_shader_build_running = False
         self.plugin_manager.load_enabled()
         self._inject_plugin_mappings()
         self.mappings.update_keymap()
@@ -2110,6 +2135,168 @@ class Boss:
         except Exception as err:
             self.show_error('Plugin command failed', str(err))
 
+    def _prompt_plugin(self, window_id: int | None, title: str, initial: str, callback: Callable[[str], None]) -> None:
+        self.get_line(title, callback, window=self.window_id_map.get(window_id), initial_value=initial, prompt='> ', window_title=title)
+
+    def _choose_plugin_entry(self, window_id: int | None, title: str, entries: tuple[tuple[str, str], ...], callback: Callable[[str], None]) -> None:
+        window = self.window_id_map.get(window_id)
+        by_choice = {f'{index}\t{label}': value for index, (value, label) in enumerate(entries)}
+        choices = tuple(by_choice)
+        self.choose(
+            title,
+            lambda choice: callback(by_choice.get(choice, '')),
+            *choices,
+            window=window,
+            title=title,
+        )
+
+    def _plugin_window_info(self, window_id: int) -> dict[str, Any]:
+        window = self.window_id_map.get(window_id)
+        if window is None or window.destroyed:
+            raise ValueError(f'Window {window_id} is no longer available')
+        tab = window.tabref()
+        return {
+            'id': window.id,
+            'title': window.title,
+            'cwd': window.cwd_of_child,
+            'tab_id': tab.id if tab is not None else None,
+            'process': window.child.foreground_cmdline[0] if window.child.foreground_cmdline else '',
+        }
+
+    def _plugin_tabs(self, window_id: int) -> tuple[dict[str, Any], ...]:
+        window = self.window_id_map.get(window_id)
+        tab = window.tabref() if window is not None else None
+        manager = tab.tab_manager_ref() if tab is not None else None
+        if manager is None:
+            return ()
+        return tuple({'id': item.id, 'title': item.name or item.title, 'is_active': item is manager.active_tab} for item in manager)
+
+    def _focus_plugin_tab(self, window_id: int, tab_id: int) -> bool:
+        window = self.window_id_map.get(window_id)
+        tab = window.tabref() if window is not None else None
+        manager = tab.tab_manager_ref() if tab is not None else None
+        target = manager.tab_for_id(tab_id) if manager is not None else None
+        return bool(target is not None and manager.set_active_tab(target))
+
+    def _launch_plugin_command(
+        self, window_id: int | None, command: tuple[str, ...], cwd: str | None, tab_title: str, launch_type: str, env: dict[str, str]
+    ) -> int | None:
+        from kitty.launch import launch, parse_launch_args
+
+        window = self.window_id_map.get(window_id)
+        args = ['--type=' + launch_type]
+        if cwd:
+            args.append('--cwd=' + cwd)
+        if tab_title:
+            args.append(('--tab-title=' if launch_type == 'tab' else '--title=') + tab_title)
+        args.extend(f'--env={k}={v}' for k, v in env.items())
+        opts, _ = parse_launch_args(args)
+        if window is not None:
+            opts.source_window = f'id:{window.id}'
+            opts.next_to = f'id:{window.id}'
+        new_window = launch(self, opts, list(command), rc_from_window=window)
+        return new_window.id if new_window is not None else None
+
+    def _plugin_notify(self, title: str, body: str) -> None:
+        nm = self.notification_manager
+        cmd = nm.create_notification_cmd()
+        cmd.title, cmd.body = title, body
+        nm.notify_with_command(cmd, 0)
+
+    def _set_plugin_tab_title(self, window_id: int, title: str) -> None:
+        window = self.window_id_map.get(window_id)
+        tab = window.tabref() if window is not None else None
+        if tab is None:
+            raise ValueError(f'Window {window_id} is no longer available')
+        tab.set_title(title)
+
+    def _set_plugin_colors(self, window_id: int | None, colors: dict[str, str] | None) -> None:
+        from .colors import parse_colors, patch_colors
+
+        if window_id is None:
+            windows = None
+        else:
+            window = self.window_id_map.get(window_id)
+            if window is None:
+                raise ValueError(f'Window {window_id} is no longer available')
+            windows = (window,)
+        if colors is None:
+            patch_colors({k: None if v is None else int(v) for k, v in self.color_settings_at_startup.items()}, windows=windows)
+            return
+        spec, tbc = parse_colors(tuple(f'{k}={v}' for k, v in colors.items()), allow_reading_conf_files=False)
+        patch_colors(spec, tbc, windows=windows)
+
+    def _set_plugin_opacity(self, window_id: int, opacity: float) -> None:
+        window = self.window_id_map.get(window_id)
+        if window is None:
+            raise ValueError(f'Window {window_id} is no longer available')
+        self._set_os_window_background_opacity(window.os_window_id, opacity)
+
+    def _set_plugin_shader_pipelines(self, paths: tuple[str, ...]) -> None:
+        load_shader_programs.plugin_custom_shaders = paths
+        if self._plugin_shader_recompile_timer is None and not self._plugin_shader_build_running:
+            # Coalesce the changes from several plugins loading at startup into one build
+            self._plugin_shader_recompile_timer = add_timer(self._build_plugin_shaders, 0.05, False)
+
+    def _build_plugin_shaders(self, _timer_id: int | None = None) -> None:
+        # slangc takes seconds, so build in a child process and only upload to
+        # the GPU on the UI thread. A thread does not work, the main loop holds
+        # the GIL while it waits for events, starving the build.
+        self._plugin_shader_recompile_timer = None
+        if self.shutting_down:
+            return
+        wanted = load_shader_programs.wanted_custom_shaders(get_options())
+        if wanted == load_shader_programs.custom_shaders:
+            return
+        import pickle
+        import subprocess
+        import tempfile
+
+        from .constants import kitty_exe
+
+        fd, output = tempfile.mkstemp(prefix='kitty-plugin-shaders-', suffix='.pickle')
+        os.close(fd)
+        code = (
+            'import pickle, sys; from kitty.shaders.slang import load_shader_programs as l\n'
+            'b = l.build_custom_shaders(tuple(sys.argv[2:]))\n'
+            'open(sys.argv[1], "wb").write(pickle.dumps(b))'
+        )
+        try:
+            proc = subprocess.Popen((kitty_exe(), '+runpy', code, output, *wanted), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        except OSError as err:
+            os.remove(output)
+            self.show_error(_('Failed to build plugin shaders'), str(err))
+            return
+        self._plugin_shader_build_running = True
+
+        def poll(timer_id: int | None) -> None:
+            if proc.poll() is None and not self.shutting_down:
+                return
+            if timer_id is not None:
+                remove_timer(timer_id)
+            self._plugin_shader_build_running = False
+            try:
+                with open(output, 'rb') as f:
+                    built = pickle.loads(f.read()) if proc.returncode == 0 else None
+            finally:
+                os.remove(output)
+            if self.shutting_down:
+                return
+            if built is None:
+                self.show_error(_('Failed to build plugin shaders'), f'The shader build process failed with exit code {proc.returncode}')
+                return
+            if built.shaders == load_shader_programs.wanted_custom_shaders(get_options()):
+                load_shader_programs.install_custom_shaders(built, allow_recompile=True)
+                self.show_custom_shader_errors()
+            else:
+                self._build_plugin_shaders()  # the wanted shaders changed while building
+
+        add_timer(poll, 0.1, True)
+
+    def _open_plugin_url(self, window_id: int | None, url: str) -> None:
+        window = self.window_id_map.get(window_id)
+        self.open_url(url, cwd=window.cwd_of_child if window is not None else None)
+
     @ac('misc', 'Review and enable a local kitty plugin')
     def enable_plugin(self, plugin_id: str) -> None:
         try:
@@ -2187,6 +2374,9 @@ class Boss:
                 if timer_id is not None:
                     remove_timer(timer_id)
                 return
+            # The main loop waits for events while holding the GIL, so hand it
+            # to the worker briefly or it can only crawl along
+            sleep(0.002)
             try:
                 error, value = result.get_nowait()
             except Empty:

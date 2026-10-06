@@ -431,6 +431,8 @@ typedef struct BorderRects {
 } BorderRects;
 
 #define CURSOR_TRAIL_HISTORY_SIZE 8
+// Each plugin shader channel has two float4 parameters and one animation event
+#define NUM_PLUGIN_SHADER_CHANNELS 16
 
 typedef struct CursorMove {
     float from_x[2], from_y[2]; // cursor edges (NDC) before the move
@@ -525,7 +527,9 @@ typedef enum {
     SHADER_ANIM_EVENT_USER_IDLE,
     SHADER_ANIM_EVENT_CURSOR_TRAIL_MOVE,
     SHADER_ANIM_EVENT_CURSOR_TRAIL_STOP,
-    NUM_SHADER_ANIM_EVENTS
+    // Fired from Python by plugins, one per plugin shader channel
+    SHADER_ANIM_EVENT_PLUGIN_SIGNAL_0,
+    NUM_SHADER_ANIM_EVENTS = SHADER_ANIM_EVENT_PLUGIN_SIGNAL_0 + NUM_PLUGIN_SHADER_CHANNELS
 } ShaderAnimationEvent;
 
 typedef struct OSWindow {
@@ -684,6 +688,9 @@ typedef struct GlobalState {
         uint32_t texture_a_id, texture_a_fbo_id;
         uint32_t texture_b_id, texture_b_fbo_id;
     } layers_render_texture;
+    float plugin_shader_params[NUM_PLUGIN_SHADER_CHANNELS * 2][4];
+    // Groups bound to a hidden channel are skipped entirely, costing no GPU work
+    bool plugin_shader_channel_hidden[NUM_PLUGIN_SHADER_CHANNELS];
 } GlobalState;
 
 extern GlobalState global_state;

@@ -1,0 +1,39 @@
+{
+  "id": "pomodoro-aura",
+  "name": "Pomodoro aura",
+  "version": "1.0.0",
+  "api_versions": [
+    1
+  ],
+  "entry_point": "main.py",
+  "capabilities": [
+    "commands",
+    "notify",
+    "settings",
+    "shaders",
+    "timers",
+    "ui"
+  ],
+  "source_url": "https://github.com/dylmarriner/cat",
+  "license": "GPL-3.0-or-later",
+  "settings": [
+    {
+      "id": "timer",
+      "title": "Pomodoro timer",
+      "fields": [
+        {
+          "key": "focus_minutes",
+          "label": "Focus minutes",
+          "type": "integer",
+          "default": 25
+        },
+        {
+          "key": "break_minutes",
+          "label": "Break minutes",
+          "type": "integer",
+          "default": 5
+        }
+      ]
+    }
+  ]
+}

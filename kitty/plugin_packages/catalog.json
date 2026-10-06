@@ -2,16 +2,547 @@
   "schema_version": 1,
   "plugins": [
     {
+      "id": "ai-command",
+      "name": "AI command",
+      "version": "1.0.0",
+      "description": "Say what you want in plain words — “find the 10 biggest files changed this week”, “undo my last commit but keep the changes” — and Claude types the matching shell command at your prompt for you to check and run.",
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "background",
+        "commands",
+        "tabs",
+        "terminal",
+        "ui",
+        "window"
+      ],
+      "license": "GPL-3.0-or-later",
+      "source_url": "https://github.com/dylmarriner/cat",
+      "package": "ai-command",
+      "sha256": "a7e79d0d60da4b1b6b62d4917022697e2c328d126156e2c0385e2aa9aafa4658"
+    },
+    {
+      "id": "ai-explain",
+      "name": "AI explain",
+      "version": "1.0.0",
+      "description": "Stuck on a wall of red? One command sends what is on screen, plus the command you ran and its exit code, to Claude and opens a scrollable explanation of what went wrong and how to fix it.",
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "background",
+        "clipboard",
+        "commands",
+        "events",
+        "launch",
+        "screen",
+        "tabs",
+        "ui",
+        "window"
+      ],
+      "license": "GPL-3.0-or-later",
+      "source_url": "https://github.com/dylmarriner/cat",
+      "package": "ai-explain",
+      "sha256": "3b843fe4fb2c41b6b71165efbcbf05466459b4c87ab7918912ea4d35a4afaee6"
+    },
+    {
+      "id": "ai-fix",
+      "name": "AI fix",
+      "version": "1.0.0",
+      "description": "Your last command failed? Run ``fix`` and Claude reads the error on screen and types a corrected command at your prompt — typos, wrong flags, missing sudo, the lot.",
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "background",
+        "commands",
+        "events",
+        "notify",
+        "screen",
+        "tabs",
+        "terminal",
+        "ui",
+        "window"
+      ],
+      "license": "GPL-3.0-or-later",
+      "source_url": "https://github.com/dylmarriner/cat",
+      "package": "ai-fix",
+      "sha256": "14d94356d7aaa4be7477d67bc1f764b1eb414f59b83f11172368ec098229d9a5"
+    },
+    {
+      "id": "auto-tab-titles",
+      "name": "Smart tab titles",
+      "version": "1.0.0",
+      "description": "Tabs name themselves: while a command runs the tab shows what it is with an icon (🐍 python, 🦀 cargo, 🐳 docker, ⎈ kubectl, 🌐 ssh host…), and at the prompt it shows the Git repository and branch you are in.",
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "background",
+        "events",
+        "tabs",
+        "window"
+      ],
+      "license": "GPL-3.0-or-later",
+      "source_url": "https://github.com/dylmarriner/cat",
+      "package": "auto-tab-titles",
+      "sha256": "8fdc680afff9c0f1516c1fa382218783e504bb93710510f8ca163b111dc695d7"
+    },
+    {
+      "id": "busy-orbit",
+      "name": "Busy orbit",
+      "version": "1.0.0",
+      "description": "While a command runs for more than a few seconds, a glowing comet orbits the border of its window, so you can see at a glance that something is still working.",
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "events",
+        "shaders",
+        "timers"
+      ],
+      "license": "GPL-3.0-or-later",
+      "source_url": "https://github.com/dylmarriner/cat",
+      "package": "busy-orbit",
+      "sha256": "06b7ec96c182b0f9b46a53af74921e2c53aa0ec323cdc81fa44f0f9ee0912652"
+    },
+    {
+      "id": "cmd-timer",
+      "name": "Command timer",
+      "version": "1.0.0",
+      "description": "Kick off a slow build and walk away: when a long command finishes in a window you are not looking at, a desktop notification tells you what finished, whether it worked and how long it took.",
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "events",
+        "notify",
+        "settings"
+      ],
+      "license": "GPL-3.0-or-later",
+      "source_url": "https://github.com/dylmarriner/cat",
+      "package": "cmd-timer",
+      "sha256": "44e31b4d83cc76de42c0066cafe3ee47f7499c586c888cdbebf601e4ad047a30"
+    },
+    {
+      "id": "color-picker",
+      "name": "Color picker",
+      "version": "1.0.0",
+      "description": "A true color picker inside your terminal: steer hue, saturation and lightness with the keyboard, see a big live swatch with complementary and analogous harmonies, and copy the result as hex, rgb() or hsl().",
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "clipboard",
+        "commands",
+        "launch",
+        "notify",
+        "ui"
+      ],
+      "license": "GPL-3.0-or-later",
+      "source_url": "https://github.com/dylmarriner/cat",
+      "package": "color-picker",
+      "sha256": "1c57aeb7c6b81f096b9bbdc8b6d114d001fc325caa3246fbbc51b7f75dbddaab"
+    },
+    {
+      "id": "command-stats",
+      "name": "Command stats",
+      "version": "1.0.0",
+      "description": "Your shell, quantified: every command is logged locally, and a full screen dashboard shows your most used tools, failure rates, time sunk into builds, your busiest hours and the slowest commands of the week.",
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "commands",
+        "events",
+        "launch",
+        "ui",
+        "window"
+      ],
+      "license": "GPL-3.0-or-later",
+      "source_url": "https://github.com/dylmarriner/cat",
+      "package": "command-stats",
+      "sha256": "842329bd05f30c98c36f26066d0bd0a4debf941b6d74a8b4d568ba8510f35caa"
+    },
+    {
+      "id": "daylight-themes",
+      "name": "Daylight themes",
+      "version": "1.0.0",
+      "description": "Your terminal follows the sun: colors drift continuously from deep night blue through dawn rose and crisp daylight to dusk amber as the hours pass.",
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "appearance",
+        "commands",
+        "timers",
+        "ui"
+      ],
+      "license": "GPL-3.0-or-later",
+      "source_url": "https://github.com/dylmarriner/cat",
+      "package": "daylight-themes",
+      "sha256": "1c59ae402af4be14fe25e9f1f8642a2e567f018a1d09822e248081b951de647b"
+    },
+    {
+      "id": "emoji-picker",
+      "name": "Emoji picker",
+      "version": "1.0.0",
+      "description": "A fast, searchable emoji grid: type to filter by name across every emoji Unicode knows, move with the arrow keys and press Enter to type the emoji into your terminal. Recently used emoji come first.",
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "commands",
+        "launch",
+        "terminal",
+        "ui",
+        "window"
+      ],
+      "license": "GPL-3.0-or-later",
+      "source_url": "https://github.com/dylmarriner/cat",
+      "package": "emoji-picker",
+      "sha256": "0cd8743e1592d480b1e76a7cac6ee8ae1a55b1edb3dced7fac3bc1a47be9e6ea"
+    },
+    {
+      "id": "fail-glitch",
+      "name": "Fail glitch",
+      "version": "1.0.0",
+      "description": "When a command fails, the screen glitches: RGB split, torn scanlines and a red flash, scaled by how bad the failure was.",
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "events",
+        "shaders"
+      ],
+      "license": "GPL-3.0-or-later",
+      "source_url": "https://github.com/dylmarriner/cat",
+      "package": "fail-glitch",
+      "sha256": "9516c4b8e07441fcee00e7320f1dfcef5264d784ac6c68eab1f22cb6fe0c2ead"
+    },
+    {
+      "id": "file-peek",
+      "name": "File peek",
+      "version": "1.0.0",
+      "description": "Browse the current directory in a split overlay with a live, syntax-highlighted preview of whatever is under the cursor. Press Enter on a file to drop its path, shell-quoted, at your prompt.",
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "commands",
+        "launch",
+        "terminal",
+        "ui",
+        "window"
+      ],
+      "license": "GPL-3.0-or-later",
+      "source_url": "https://github.com/dylmarriner/cat",
+      "package": "file-peek",
+      "sha256": "14c6d4807efffba623ce03d63272686dd80f3d4b7061837dbd6b80219e617253"
+    },
+    {
+      "id": "git-dashboard",
+      "name": "Git dashboard",
+      "version": "1.0.0",
+      "description": "Everything about the repository you are in on one screen: branch and upstream drift, staged / changed / untracked files with diff stats, stashes, and a colored commit graph.",
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "commands",
+        "launch",
+        "ui",
+        "window"
+      ],
+      "license": "GPL-3.0-or-later",
+      "source_url": "https://github.com/dylmarriner/cat",
+      "package": "git-dashboard",
+      "sha256": "abc20cc146ef930e9b877d48fe4a815a5047e91a6938fb3ec4983c54b857088d"
+    },
+    {
+      "id": "git-mood",
+      "name": "Git mood light",
+      "version": "1.0.0",
+      "description": "An ambient light that shows the state of the repository you are in: calm green when clean, amber with changes, red during merge conflicts, violet when ahead of the remote, blue on a detached HEAD.",
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "background",
+        "events",
+        "shaders",
+        "window"
+      ],
+      "license": "GPL-3.0-or-later",
+      "source_url": "https://github.com/dylmarriner/cat",
+      "package": "git-mood",
+      "sha256": "651427177507d617ee75dbf0f596d564154e86b8db3386a9c5e1f11ee13eb56f"
+    },
+    {
+      "id": "load-heatwave",
+      "name": "Load heatwave",
+      "version": "1.0.0",
+      "description": "Feel your machine working: when CPU load climbs, heat shimmer rises from the bottom of the terminal and the glow turns from orange to angry red.",
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "shaders",
+        "timers"
+      ],
+      "license": "GPL-3.0-or-later",
+      "source_url": "https://github.com/dylmarriner/cat",
+      "package": "load-heatwave",
+      "sha256": "cbfcccb91db929977a59b45bd152815daaad90fe91d7b4f500a2b8f0fcbd160d"
+    },
+    {
+      "id": "pomodoro-aura",
+      "name": "Pomodoro aura",
+      "version": "1.0.0",
+      "description": "A focus timer you can feel: a glowing progress bar across the top of kitty, and an aura that warms from cool teal to amber as the focus session runs out. Breaks breathe in soft green.",
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "commands",
+        "notify",
+        "settings",
+        "shaders",
+        "timers",
+        "ui"
+      ],
+      "license": "GPL-3.0-or-later",
+      "source_url": "https://github.com/dylmarriner/cat",
+      "package": "pomodoro-aura",
+      "sha256": "7e23cd05d6d50320f5831b0af699897e9644f79177dc65ba9ac07d738ba97774"
+    },
+    {
+      "id": "prod-guard",
+      "name": "Prod guard",
+      "version": "1.0.0",
+      "description": "Never mistake production for staging again: when a command touches production, that window turns blood red and kitty draws hazard stripes around it until the command ends.",
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "appearance",
+        "events",
+        "settings",
+        "shaders"
+      ],
+      "license": "GPL-3.0-or-later",
+      "source_url": "https://github.com/dylmarriner/cat",
+      "package": "prod-guard",
+      "sha256": "9c001b7c429b88a9a709295b8a9e32a02e7b925e2149a3479e3fb72cdbe3c700"
+    },
+    {
+      "id": "reopen-closed",
+      "name": "Reopen closed",
+      "version": "1.0.0",
+      "description": "Ctrl+Shift+T for your terminal: closed a shell by accident? Bring it back in the same directory with the same title, or pick from the last twenty closed shells.",
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "commands",
+        "events",
+        "launch",
+        "ui",
+        "window"
+      ],
+      "license": "GPL-3.0-or-later",
+      "source_url": "https://github.com/dylmarriner/cat",
+      "package": "reopen-closed",
+      "sha256": "75bd80b40c773fed5640bdc337c009a8898679d9d79d42f57f5423d42b5114e5"
+    },
+    {
+      "id": "screen-watcher",
+      "name": "Screen watcher",
+      "version": "1.0.0",
+      "description": "Tell kitty what you are waiting for (“compiled successfully”, “ERROR”, a request ID…) and go do something else: when it appears in the watched window you get a notification, a flash of light and a 🔔 in the tab title.",
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "commands",
+        "notify",
+        "screen",
+        "shaders",
+        "tabs",
+        "timers",
+        "ui"
+      ],
+      "license": "GPL-3.0-or-later",
+      "source_url": "https://github.com/dylmarriner/cat",
+      "package": "screen-watcher",
+      "sha256": "6f5260ec6c4f2f6a34df1cd04138e48faf74088275c2da851d7cbcf414729133"
+    },
+    {
       "id": "smart-scroll",
       "name": "Smart scroll",
       "version": "1.0.0",
       "description": "Scroll kitty history normally and forward the same keys to alternate-screen applications.",
-      "api_versions": [1],
-      "capabilities": ["commands", "key_mappings", "scroll", "terminal"],
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "commands",
+        "key_mappings",
+        "scroll",
+        "terminal"
+      ],
       "license": "GPL-3.0-or-later",
       "source_url": "https://github.com/yurikhan/kitty-smart-scroll",
       "package": "smart-scroll",
       "sha256": "02b5c3f96fe126368e82a716e0c31ea986e4b3b2dd88d476b06c1f3d272a1563"
+    },
+    {
+      "id": "snake",
+      "name": "Snake",
+      "version": "1.0.0",
+      "description": "The classic, rendered in true color inside a kitty overlay: a gradient snake that speeds up as it grows, glowing food, wrap-free walls and a high score that survives restarts. For compile breaks.",
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "commands",
+        "launch",
+        "ui"
+      ],
+      "license": "GPL-3.0-or-later",
+      "source_url": "https://github.com/dylmarriner/cat",
+      "package": "snake",
+      "sha256": "6f964f5bc4878f84844c780e820a1f3340d91d6b48c23e61b03acdd8c916459e"
+    },
+    {
+      "id": "ssh-themes",
+      "name": "SSH host themes",
+      "version": "1.0.0",
+      "description": "Every server gets its own color: when you ssh somewhere, that window takes on a tint, cursor and border color derived from the host name, so the same host always looks the same and different hosts never look alike.",
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "appearance",
+        "events"
+      ],
+      "license": "GPL-3.0-or-later",
+      "source_url": "https://github.com/dylmarriner/cat",
+      "package": "ssh-themes",
+      "sha256": "621d9e88d86546e4cf2a6bedfaac037a8df32c5bd432ccd327b0b5130f84c69b"
+    },
+    {
+      "id": "streak-fireworks",
+      "name": "Streak fireworks",
+      "version": "1.0.0",
+      "description": "Gamifies your shell: every successful command builds a streak, and streak milestones launch fireworks over the terminal. A failure resets the streak.",
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "commands",
+        "events",
+        "notify",
+        "shaders",
+        "ui"
+      ],
+      "license": "GPL-3.0-or-later",
+      "source_url": "https://github.com/dylmarriner/cat",
+      "package": "streak-fireworks",
+      "sha256": "c40978a1a7ae5e164bdcb2045d6e09eb429457d212bafa38868f3b4a45dda561"
+    },
+    {
+      "id": "sysmon-hud",
+      "name": "System monitor HUD",
+      "version": "1.0.0",
+      "description": "A heads-up display over your terminal: per-core CPU bars, memory and swap gauges, network throughput sparklines, load and the hungriest processes, refreshed every second.",
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "commands",
+        "launch",
+        "ui",
+        "window"
+      ],
+      "license": "GPL-3.0-or-later",
+      "source_url": "https://github.com/dylmarriner/cat",
+      "package": "sysmon-hud",
+      "sha256": "bc19e19fcb25a29f0bb1cc0ba2b6a146bb9a16a3e28ed48487b8825849834c0c"
+    },
+    {
+      "id": "tab-switcher",
+      "name": "Tab switcher",
+      "version": "1.0.0",
+      "description": "Find and focus kitty tabs by title with a native chooser.",
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "commands",
+        "tabs",
+        "ui"
+      ],
+      "license": "GPL-3.0-or-later",
+      "source_url": "https://github.com/OsiPog/kitty-tab-switcher",
+      "package": "tab-switcher",
+      "sha256": "a709d9113c4550014ab6c4c41edfae74685aaac5b3e598ce99332865b82de68f"
+    },
+    {
+      "id": "typing-test",
+      "name": "Typing test",
+      "version": "1.0.0",
+      "description": "How fast do you really type code? A typing test made of real shell, Python, Rust and JavaScript lines, with live per-character feedback, WPM, accuracy and a personal best.",
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "commands",
+        "launch",
+        "ui"
+      ],
+      "license": "GPL-3.0-or-later",
+      "source_url": "https://github.com/dylmarriner/cat",
+      "package": "typing-test",
+      "sha256": "532e76f219844875fa8a2deadcbdb30065ac328f32fb26c2ff1cdee49d1f2c75"
+    },
+    {
+      "id": "warp-screensaver",
+      "name": "Warp screensaver",
+      "version": "1.0.0",
+      "description": "Leave kitty idle and it jumps to hyperspace: a starfield streaks out from the center of the screen over your terminal. Touch anything and you drop back to normal space.",
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "commands",
+        "shaders",
+        "ui"
+      ],
+      "license": "GPL-3.0-or-later",
+      "source_url": "https://github.com/dylmarriner/cat",
+      "package": "warp-screensaver",
+      "sha256": "dc004961889fc2e27f726366d4ff342a461e05b28dcd8f96f2749ba338272e83"
+    },
+    {
+      "id": "worktree-switcher",
+      "name": "Git worktree switcher",
+      "version": "1.0.0",
+      "description": "Choose a Git worktree and open it in a new kitty tab.",
+      "api_versions": [
+        1
+      ],
+      "capabilities": [
+        "commands",
+        "launch",
+        "ui",
+        "window"
+      ],
+      "license": "GPL-3.0-or-later",
+      "source_url": "https://github.com/shaunchander/kitty-worktree",
+      "package": "worktree-switcher",
+      "sha256": "c77ca7aa605c8dbcac1a6dc483be8644a10fe1ded196ef1523fcec65e5cca0f0"
     }
   ]
 }

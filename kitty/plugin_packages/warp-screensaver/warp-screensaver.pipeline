@@ -1,0 +1,7 @@
+startgroup
+    animation_start user-idle
+    animation_stop user-activity | 900000
+    animation_curve linear
+    animation_step 33
+    shaders warp-screensaver
+endgroup

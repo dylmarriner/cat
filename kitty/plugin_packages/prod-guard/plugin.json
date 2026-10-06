@@ -1,0 +1,31 @@
+{
+  "id": "prod-guard",
+  "name": "Prod guard",
+  "version": "1.0.0",
+  "api_versions": [
+    1
+  ],
+  "entry_point": "main.py",
+  "capabilities": [
+    "appearance",
+    "events",
+    "settings",
+    "shaders"
+  ],
+  "source_url": "https://github.com/dylmarriner/cat",
+  "license": "GPL-3.0-or-later",
+  "settings": [
+    {
+      "id": "guard",
+      "title": "Prod guard",
+      "fields": [
+        {
+          "key": "pattern",
+          "label": "Dangerous command pattern (regular expression)",
+          "type": "string",
+          "default": "^(ssh|mosh|kubectl|k9s|helm|psql|mysql|redis-cli|mongo\\w*|terraform|ansible\\S*|aws|gcloud)\\b.*\\b(prod|production|prd)\\b"
+        }
+      ]
+    }
+  ]
+}

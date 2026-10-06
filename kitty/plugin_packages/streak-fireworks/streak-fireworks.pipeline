@@ -1,0 +1,7 @@
+startgroup
+    animation_start @SIGNAL@
+    animation_stop 2400
+    animation_curve linear
+    animation_step 16
+    shaders streak-fireworks
+endgroup

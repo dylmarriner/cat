@@ -1613,7 +1613,15 @@ class Window:
     def on_da1(self) -> None:
         self.screen.send_escape_code_to_child(ESC_CSI, da1(get_options()))
 
+    def emit_plugin_event(self, name: str, **kw: Any) -> None:
+        plugin_manager = getattr(get_boss(), 'plugin_manager', None)
+        if plugin_manager is not None:
+            from .plugins import PluginEvent
+
+            plugin_manager.emit(PluginEvent(name, self.id, self.tab_id, self.title or '', **kw))
+
     def on_bell(self) -> None:
+        self.emit_plugin_event('bell')
         cb = get_options().command_on_bell
         if cb and cb != ['none']:
             import shlex
@@ -1961,6 +1969,7 @@ class Window:
         self.call_watchers(
             self.watchers.on_cmd_startstop, {'is_start': False, 'time': end_time, 'cmdline': self.last_cmd_cmdline, 'exit_status': self.last_cmd_exit_status}
         )
+        self.emit_plugin_event('command_finished', exit_code=self.last_cmd_exit_status, cmdline=self.last_cmd_cmdline, duration=last_cmd_output_duration)
 
         opts = get_options()
         when, duration, action, notify_cmdline, _ = opts.notify_on_cmd_finish
@@ -2005,6 +2014,7 @@ class Window:
             cmdline = decode_cmdline(cmdline) if cmdline else ''
             self.last_cmd_cmdline = cmdline
             self.call_watchers(self.watchers.on_cmd_startstop, {'is_start': True, 'time': start_time, 'cmdline': cmdline, 'exit_status': 0})
+            self.emit_plugin_event('command_started', cmdline=cmdline)
         else:
             self.handle_cmd_end(cmdline)
 

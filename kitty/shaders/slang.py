@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import types
 from collections import OrderedDict
@@ -183,6 +184,9 @@ class LoadShaderPrograms:
     text_fg_override_threshold: tuple[float, Literal['%', 'ratio']] = 0, '%'
     text_old_gamma: bool = False
     custom_shaders: tuple[str, ...] = ()
+    # Absolute pipeline paths contributed by enabled plugins, appended to the
+    # custom_shaders option
+    plugin_custom_shaders: tuple[str, ...] = ()
     force_recompile_of_custom_shaders: bool = False
 
     opts: Options | None = None
@@ -216,7 +220,7 @@ class LoadShaderPrograms:
             self(allow_recompile=True)
         else:
             opts = self.get_options()
-            if tuple(opts.custom_shaders) != self.custom_shaders or self.force_recompile_of_custom_shaders:
+            if self.wanted_custom_shaders(opts) != self.custom_shaders or self.force_recompile_of_custom_shaders:
                 self.compile_custom_shaders(allow_recompile=True)
 
     def __call__(self, allow_recompile: bool = False) -> None:
@@ -254,21 +258,27 @@ class LoadShaderPrograms:
         compile_program(-1, (), (), {})  # initialize programs
         self.compile_custom_shaders(allow_recompile)
 
+    def wanted_custom_shaders(self, opts: Options) -> tuple[str, ...]:
+        return tuple(opts.custom_shaders) + self.plugin_custom_shaders
+
     def compile_custom_shaders(self, allow_recompile: bool = False) -> None:
         self.force_recompile_of_custom_shaders = False
-        opts = self.get_options()
-        self.custom_shaders = tuple(opts.custom_shaders)
-        self.custom_shader_errors = []
+        self.install_custom_shaders(self.build_custom_shaders(self.wanted_custom_shaders(self.get_options())), allow_recompile)
+
+    def build_custom_shaders(self, shaders: tuple[str, ...]) -> 'BuiltCustomShaders':
+        """Run the slow slangc part of building custom shaders. Makes no GL calls,
+        so it can run in a worker thread, see install_custom_shaders()."""
+        errors: list[str] = []
 
         def err(msg: str) -> None:
             # Record as well as log: a failure here leaves the shader disabled
             # with no visible difference from not setting custom_shaders at all,
             # so the Boss shows these to the user.
             log_error(msg)
-            self.custom_shader_errors.append(msg)
+            errors.append(msg)
 
         pmap: dict[str, list[Pipeline]] = {}
-        for k in self.custom_shaders:
+        for k in shaders:
             try:
                 d = parse_pipeline(k)
             except FileNotFoundError:
@@ -287,48 +297,64 @@ class LoadShaderPrograms:
                 continue
             pmap.setdefault(d['slot'], []).append(d)
 
-        def disable(prog: int) -> None:
+        end: tuple[str, str, dict[str, Any]] | None = None
+        slot_pipelines = pmap.get('end')
+        if slot_pipelines:
+            try:
+                with custom_shader_build_lock:
+                    end = build_custom_shader_pipeline_glsl(merge_pipelines(slot_pipelines))
+            except FileNotFoundError as e:
+                if e.filename == slangc()[0]:
+                    # Without slangc no custom shader can be built at all, and
+                    # a bare "No such file or directory" gives no hint as to why.
+                    err(
+                        'Failed to build custom shader for slot end because the slang shader compiler'
+                        f' ({slangc()[0]}) was not found. Install shader-slang to use custom shaders.'
+                    )
+                else:
+                    err(f'Failed to build custom shader for slot end with error: {e}')
+            except Exception as e:
+                err(f'Failed to build custom shader for slot end with error: {e}')
+        return BuiltCustomShaders(shaders, end, tuple(errors))
+
+    def install_custom_shaders(self, built: 'BuiltCustomShaders', allow_recompile: bool = False) -> None:
+        """Load shaders from build_custom_shaders() into GL, must run on the main thread."""
+        self.custom_shaders = built.shaders
+        self.custom_shader_errors = list(built.errors)
+        prog = CUSTOM_END_PROGRAM
+
+        def disable() -> None:
             # Forget the cached sources as well, otherwise re-enabling the same
             # shader later is a no-op because the sources compare equal while the
             # program itself is empty.
             compile_program(prog, (), (), {}, allow_recompile)
             self.last_built_custom_shaders.pop(prog, None)
 
-        def do(prog: int, slot: str) -> None:
-            slot_pipelines = pmap.get(slot)
-            if not slot_pipelines:
-                disable(prog)
-            else:
-                try:
-                    pipeline = merge_pipelines(slot_pipelines)
-                    vert, frag, metadata = build_custom_shader_pipeline_glsl(pipeline)
-                    # print(vert, file=open('/tmp/sample.vert', 'w'))
-                    # print(frag, file=open('/tmp/sample.frag', 'w'))
-                except FileNotFoundError as e:
-                    if e.filename == slangc()[0]:
-                        # Without slangc no custom shader can be built at all, and
-                        # a bare "No such file or directory" gives no hint as to why.
-                        err(
-                            f'Failed to build custom shader for slot {slot} because the slang shader compiler'
-                            f' ({slangc()[0]}) was not found. Install shader-slang to use custom shaders.'
-                        )
-                    else:
-                        err(f'Failed to build custom shader for slot {slot} with error: {e}')
-                    disable(prog)
-                except Exception as e:
-                    err(f'Failed to build custom shader for slot {slot} with error: {e}')
-                    disable(prog)
-                else:
-                    try:
-                        if self.last_built_custom_shaders.get(prog) != (vert, frag, metadata):
-                            compile_program(prog, (vert,), (frag,), metadata, allow_recompile)
-                            self.last_built_custom_shaders[prog] = vert, frag, metadata
-                    except Exception as e:
-                        err(f'Failed to load custom shader for slot {slot} with error: {e}')
-                        disable(prog)
-
-        do(CUSTOM_END_PROGRAM, 'end')
+        if built.end is None:
+            disable()
+        else:
+            try:
+                if self.last_built_custom_shaders.get(prog) != built.end:
+                    vert, frag, metadata = built.end
+                    compile_program(prog, (vert,), (frag,), metadata, allow_recompile)
+                    self.last_built_custom_shaders[prog] = built.end
+            except Exception as e:
+                msg = f'Failed to load custom shader for slot end with error: {e}'
+                log_error(msg)
+                self.custom_shader_errors.append(msg)
+                disable()
         compile_program(-2, (), (), {})  # initialize programs
+
+
+class BuiltCustomShaders(NamedTuple):
+    shaders: tuple[str, ...]
+    end: tuple[str, str, dict[str, Any]] | None  # vertex, fragment, metadata; None disables the slot
+    errors: tuple[str, ...]
+
+
+# slangc output caches are guarded by a file lock, which does not exclude
+# other threads of the same process
+custom_shader_build_lock = threading.Lock()
 
 
 load_shader_programs = LoadShaderPrograms()
@@ -1157,6 +1183,7 @@ def is_valid_slot(x: str) -> TypeGuard[Slot]:
     return x in Slot._value2member_map_
 
 
+NUM_PLUGIN_SHADER_CHANNELS = 16  # must match NUM_PLUGIN_SHADER_CHANNELS in state.h
 VALID_VAR_TYPES: frozenset[str] = frozenset({'uint', 'int', 'float', 'double', 'bool'})
 SHADER_ANIMATION_EVENTS: frozenset[str] = frozenset(
     {
@@ -1171,6 +1198,7 @@ SHADER_ANIMATION_EVENTS: frozenset[str] = frozenset(
         'user-idle',
         'cursor-trail-move',
         'cursor-trail-stop',
+        *(f'plugin-signal-{i}' for i in range(NUM_PLUGIN_SHADER_CHANNELS)),
     }
 )
 
@@ -1261,6 +1289,7 @@ class Group(TypedDict):
     animation_end_events: tuple[str, ...]  # events that stop the animation
     animation_end_duration: int  # nanoseconds; 0 = no time limit, negative = use cursor_stop_blinking_after
     attached: bool  # if True, this group is always active when the previous group is active
+    plugin_channel: int  # plugin shader channel that can hide this group, -1 for none
 
 
 class Pipeline(TypedDict):
@@ -1301,6 +1330,7 @@ def parse_pipeline_definition(lines: Iterable[str], pipeline_name: str, pipeline
             'animation_end_events': (),
             'animation_end_duration': -1,
             'attached': False,
+            'plugin_channel': -1,
         }
 
     for line in lines:
@@ -1370,6 +1400,11 @@ def parse_pipeline_definition(lines: Iterable[str], pipeline_name: str, pipeline
                         current_group['animation_end_duration'] = end_duration
                 case 'attach':
                     current_group['attached'] = True
+                case 'plugin_channel':
+                    channel = int(parts[1])
+                    if not 0 <= channel < NUM_PLUGIN_SHADER_CHANNELS:
+                        raise ValueError(f'plugin_channel must be from 0 to {NUM_PLUGIN_SHADER_CHANNELS - 1}, not: {channel}')
+                    current_group['plugin_channel'] = channel
                 case 'endgroup':
                     commit_group()
                 case _:

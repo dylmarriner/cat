@@ -1,0 +1,7 @@
+startgroup
+    animation_start @SIGNAL@
+    animation_stop 650
+    animation_curve ease-out
+    animation_step 16
+    shaders fail-glitch
+endgroup

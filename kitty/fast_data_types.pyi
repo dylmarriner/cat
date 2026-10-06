@@ -1422,6 +1422,9 @@ class OSWindowSize(TypedDict):
     cell_height: int
     is_layer_shell: bool
 
+def set_plugin_shader_param(index: int, x: float, y: float, z: float, w: float) -> None: ...
+def fire_plugin_shader_signal(channel: int) -> None: ...
+def set_plugin_shader_channel_visible(channel: int, visible: bool) -> None: ...
 def mark_os_window_dirty(os_window_id: int) -> None:
     pass
 

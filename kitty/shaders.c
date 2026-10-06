@@ -409,7 +409,14 @@ typedef struct CustomShaderGroup {
     Animation *animation_curve;         // parsed easing curve; NULL = no animation
     bool animation_curve_is_shared;     // true if animation_curve is owned by an earlier group
     bool attached;                      // true = always active when the preceding group is active
+    int plugin_channel;                 // plugin shader channel that can hide this group, -1 = none
 } CustomShaderGroup;
+
+// A group whose plugin channel is hidden behaves as if it does not exist
+static inline bool
+group_is_suppressed(const CustomShaderGroup *cg) {
+    return cg->plugin_channel >= 0 && global_state.plugin_shader_channel_hidden[cg->plugin_channel];
+}
 
 typedef struct CustomShaderPipeline {
     unsigned textures; // bit mask of named textures from above enum
@@ -515,6 +522,7 @@ init_cell_program(void) {
 // of their predecessor.
 static bool
 group_is_initially_active(const CustomShaderGroup *cg, bool predecessor_is_active) {
+    if (group_is_suppressed(cg)) return false;
     return cg->attached ? predecessor_is_active : (cg->animation_start_events == 0);
 }
 
@@ -621,7 +629,7 @@ init_shader_animation_state(OSWindow *osw) {
 
 static const char *
 shader_anim_event_mask_str(unsigned mask) {
-    static char buf[256];
+    static char buf[512];
     char *p = buf;
     char *const end = buf + sizeof(buf) - 1;
     static const struct {
@@ -639,6 +647,22 @@ shader_anim_event_mask_str(unsigned mask) {
         {1u << SHADER_ANIM_EVENT_USER_IDLE, "user-idle"},
         {1u << SHADER_ANIM_EVENT_CURSOR_TRAIL_MOVE, "cursor-trail-move"},
         {1u << SHADER_ANIM_EVENT_CURSOR_TRAIL_STOP, "cursor-trail-stop"},
+        {1u << (SHADER_ANIM_EVENT_PLUGIN_SIGNAL_0 + 0), "plugin-signal-0"},
+        {1u << (SHADER_ANIM_EVENT_PLUGIN_SIGNAL_0 + 1), "plugin-signal-1"},
+        {1u << (SHADER_ANIM_EVENT_PLUGIN_SIGNAL_0 + 2), "plugin-signal-2"},
+        {1u << (SHADER_ANIM_EVENT_PLUGIN_SIGNAL_0 + 3), "plugin-signal-3"},
+        {1u << (SHADER_ANIM_EVENT_PLUGIN_SIGNAL_0 + 4), "plugin-signal-4"},
+        {1u << (SHADER_ANIM_EVENT_PLUGIN_SIGNAL_0 + 5), "plugin-signal-5"},
+        {1u << (SHADER_ANIM_EVENT_PLUGIN_SIGNAL_0 + 6), "plugin-signal-6"},
+        {1u << (SHADER_ANIM_EVENT_PLUGIN_SIGNAL_0 + 7), "plugin-signal-7"},
+        {1u << (SHADER_ANIM_EVENT_PLUGIN_SIGNAL_0 + 8), "plugin-signal-8"},
+        {1u << (SHADER_ANIM_EVENT_PLUGIN_SIGNAL_0 + 9), "plugin-signal-9"},
+        {1u << (SHADER_ANIM_EVENT_PLUGIN_SIGNAL_0 + 10), "plugin-signal-10"},
+        {1u << (SHADER_ANIM_EVENT_PLUGIN_SIGNAL_0 + 11), "plugin-signal-11"},
+        {1u << (SHADER_ANIM_EVENT_PLUGIN_SIGNAL_0 + 12), "plugin-signal-12"},
+        {1u << (SHADER_ANIM_EVENT_PLUGIN_SIGNAL_0 + 13), "plugin-signal-13"},
+        {1u << (SHADER_ANIM_EVENT_PLUGIN_SIGNAL_0 + 14), "plugin-signal-14"},
+        {1u << (SHADER_ANIM_EVENT_PLUGIN_SIGNAL_0 + 15), "plugin-signal-15"},
     };
     bool first = true;
     for (size_t i = 0; i < sizeof(events) / sizeof(events[0]); i++) {
@@ -677,6 +701,11 @@ update_custom_shader_animations(unsigned event_mask, monotonic_t now, OSWindow *
     for (size_t i = 0; i < p->num_groups; i++) {
         const CustomShaderGroup *cg = &p->groups[i];
         bool this_active;
+        if (group_is_suppressed(cg)) {
+            os_window->shader_group_anim[i].active = false;
+            prev_active = false;
+            continue;
+        }
         if (!cg->attached && cg->animation_start_events == 0) {
             // Always-active, non-attached group — never enters the state machine.
             any_active = true;
@@ -2603,6 +2632,7 @@ run_custom_end_shader(OSWindow *os_window, float sx, float sy, monotonic_t now) 
         float cursor_trail_history_from[CURSOR_TRAIL_HISTORY_SIZE][4];
         float cursor_trail_history_to[CURSOR_TRAIL_HISTORY_SIZE][4];
         float cursor_trail_history_age[CURSOR_TRAIL_HISTORY_SIZE / 4][4];
+        float plugin_params[NUM_PLUGIN_SHADER_CHANNELS * 2][4];
         uint32_t viewport_size_pixels[2];
         float mouse_pointer_hidden;
         float cursor_trail_state;
@@ -2643,6 +2673,7 @@ run_custom_end_shader(OSWindow *os_window, float sx, float sy, monotonic_t now) 
     } while (0)
     FILL_COLOR(d->background, OPT(background));
     FILL_COLOR(d->foreground, OPT(foreground));
+    memcpy(d->plugin_params, global_state.plugin_shader_params, sizeof(d->plugin_params));
     color_type active_bg = OPT(background);
     color_type cursor_color = OPT(foreground);
     float cursor_opacity = 0.f;
@@ -2845,6 +2876,7 @@ run_custom_end_shader(OSWindow *os_window, float sx, float sy, monotonic_t now) 
     for (unsigned g = 0; g < num_groups; g++) {
         const CustomShaderGroup *cg = &custom_shaders.end.groups[g];
         // Non-attached always-active groups always run; attached and animated groups run only when active.
+        if (group_is_suppressed(cg)) continue;
         if ((!cg->attached && cg->animation_start_events == 0) || os_window->shader_group_anim[g].active) last_active_g = (int)g;
     }
 
@@ -2865,6 +2897,7 @@ run_custom_end_shader(OSWindow *os_window, float sx, float sy, monotonic_t now) 
 
         // Skip inactive groups. Non-attached, non-animated groups always run; all others require
         // shader_group_anim[g].active (set by update_custom_shader_animations, including attach logic).
+        if (group_is_suppressed(cg)) continue;
         if ((cg->animation_start_events != 0 || cg->attached) && !os_window->shader_group_anim[g].active) continue;
         const GLuint backbuffer = backbuffer_is_main ? global_state.layers_render_texture.texture_id : global_state.layers_render_texture.extra_texture_id;
 
@@ -3139,6 +3172,11 @@ shader_anim_event_bit(const char *s) {
     if (strcmp(s, "user-idle") == 0) return 1u << SHADER_ANIM_EVENT_USER_IDLE;
     if (strcmp(s, "cursor-trail-move") == 0) return 1u << SHADER_ANIM_EVENT_CURSOR_TRAIL_MOVE;
     if (strcmp(s, "cursor-trail-stop") == 0) return 1u << SHADER_ANIM_EVENT_CURSOR_TRAIL_STOP;
+    if (strncmp(s, "plugin-signal-", 14) == 0 && s[14]) {
+        char *end = NULL;
+        const long channel = strtol(s + 14, &end, 10);
+        if (end && !*end && channel >= 0 && channel < NUM_PLUGIN_SHADER_CHANNELS) return 1u << (SHADER_ANIM_EVENT_PLUGIN_SIGNAL_0 + channel);
+    }
     return 0;
 }
 
@@ -3225,6 +3263,10 @@ transfer_pipeline_to_struct(PyObject *pg, CustomShaderPipeline *p) {
 
         PyObject *attached = PyDict_GetItemString(g, "attached");
         cg->attached = attached && PyObject_IsTrue(attached);
+
+        PyObject *pc = PyDict_GetItemString(g, "plugin_channel");
+        const long channel = (pc && PyLong_Check(pc)) ? PyLong_AsLong(pc) : -1;
+        cg->plugin_channel = (channel >= 0 && channel < NUM_PLUGIN_SHADER_CHANNELS) ? (int)channel : -1;
     }
     p->all_animation_start_events = 0;
     for (size_t i = 0; i < p->num_groups; i++) p->all_animation_start_events |= p->groups[i].animation_start_events;
@@ -3421,9 +3463,70 @@ pysimulate_custom_shader_render_ticks(PyObject *self UNUSED, PyObject *args) {
     return Py_NewRef(ans);
 }
 
+// Plugins drive their custom shaders through per channel parameters that are
+// exposed to shaders as KittyCustomShaderData.plugin_params and through the
+// plugin-signal-N animation events.
+static PyObject *
+pyset_plugin_shader_param(PyObject *self UNUSED, PyObject *args) {
+    unsigned int idx;
+    float x, y, z, w;
+    if (!PyArg_ParseTuple(args, "Iffff", &idx, &x, &y, &z, &w)) return NULL;
+    if (idx >= NUM_PLUGIN_SHADER_CHANNELS * 2) {
+        PyErr_SetString(PyExc_IndexError, "plugin shader parameter index out of range");
+        return NULL;
+    }
+    float *p = global_state.plugin_shader_params[idx];
+    p[0] = x;
+    p[1] = y;
+    p[2] = z;
+    p[3] = w;
+    for (size_t i = 0; i < global_state.num_os_windows; i++) global_state.os_windows[i].needs_render = true;
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+pyfire_plugin_shader_signal(PyObject *self UNUSED, PyObject *args) {
+    unsigned int channel;
+    if (!PyArg_ParseTuple(args, "I", &channel)) return NULL;
+    if (channel >= NUM_PLUGIN_SHADER_CHANNELS) {
+        PyErr_SetString(PyExc_IndexError, "plugin shader channel out of range");
+        return NULL;
+    }
+    for (size_t i = 0; i < global_state.num_os_windows; i++) {
+        OSWindow *osw = global_state.os_windows + i;
+        osw->shader_anim_event_registry |= 1u << (SHADER_ANIM_EVENT_PLUGIN_SIGNAL_0 + channel);
+        osw->needs_render = true;
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+pyset_plugin_shader_channel_visible(PyObject *self UNUSED, PyObject *args) {
+    unsigned int channel;
+    int visible;
+    if (!PyArg_ParseTuple(args, "Ip", &channel, &visible)) return NULL;
+    if (channel >= NUM_PLUGIN_SHADER_CHANNELS) {
+        PyErr_SetString(PyExc_IndexError, "plugin shader channel out of range");
+        return NULL;
+    }
+    if (global_state.plugin_shader_channel_hidden[channel] == !visible) Py_RETURN_NONE;
+    global_state.plugin_shader_channel_hidden[channel] = !visible;
+    for (size_t i = 0; i < global_state.num_os_windows; i++) {
+        OSWindow *osw = global_state.os_windows + i;
+        // force update_custom_shader_animations() off its fast path so the
+        // set of active groups, and with it the need for layers, is recomputed
+        osw->shader_anim.next_end_at = 0;
+        osw->needs_render = true;
+    }
+    Py_RETURN_NONE;
+}
+
 #define M(name, arg_type) {#name, (PyCFunction)name, arg_type, NULL}
 #define MW(name, arg_type) {#name, (PyCFunction)py##name, arg_type, NULL}
 static PyMethodDef module_methods[] = {
+    MW(set_plugin_shader_param, METH_VARARGS),
+    MW(set_plugin_shader_channel_visible, METH_VARARGS),
+    MW(fire_plugin_shader_signal, METH_VARARGS),
     M(compile_program, METH_VARARGS),
     M(sprite_map_set_limits, METH_VARARGS),
     MW(create_vao, METH_NOARGS),

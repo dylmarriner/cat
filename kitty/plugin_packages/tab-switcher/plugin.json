@@ -1,0 +1,11 @@
+{
+  "id": "tab-switcher",
+  "name": "Tab switcher",
+  "version": "1.0.0",
+  "api_versions": [1],
+  "entry_point": "main.py",
+  "capabilities": ["commands", "tabs", "ui"],
+  "source_url": "https://github.com/OsiPog/kitty-tab-switcher",
+  "license": "GPL-3.0-or-later",
+  "settings": []
+}

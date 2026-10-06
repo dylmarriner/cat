@@ -73,6 +73,10 @@ public struct KittyCustomShaderData {
     // Seconds since each move, move i is in cursor_trail_history_age[i / 4][i % 4].
     // Negative for unused entries.
     public float4 cursor_trail_history_age[2];
+    // Parameters set by kitty plugins. Each plugin shader channel N owns
+    // plugin_params[2 * N] and plugin_params[2 * N + 1]. A plugin pipeline
+    // gets its channel number as the PLUGIN_CHANNEL variable.
+    public float4 plugin_params[32];
     // the size in pixels of the full underlying viewport we are rendering too,
     // before applying any viewport transforms from the current group.
     // You can use t.viewport to derive the actual size and position of the

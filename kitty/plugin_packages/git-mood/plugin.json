@@ -1,0 +1,18 @@
+{
+  "id": "git-mood",
+  "name": "Git mood light",
+  "version": "1.0.0",
+  "api_versions": [
+    1
+  ],
+  "entry_point": "main.py",
+  "capabilities": [
+    "background",
+    "events",
+    "shaders",
+    "window"
+  ],
+  "source_url": "https://github.com/dylmarriner/cat",
+  "license": "GPL-3.0-or-later",
+  "settings": []
+}

@@ -1,0 +1,6 @@
+startgroup
+    animation_start @SIGNAL@
+    animation_stop 1600
+    animation_step 33
+    shaders busy-orbit
+endgroup

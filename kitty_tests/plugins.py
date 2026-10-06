@@ -16,7 +16,9 @@ from urllib.request import Request
 from kitty.plugins import PluginError, PluginEvent, PluginManager, PluginManifest, _HTTPSRedirectHandler
 from tools.package_utils import package_source_ignore
 
-ALL_CAPABILITIES = frozenset({'commands', 'events', 'settings', 'key_mappings', 'ui', 'terminal', 'screen', 'scroll'})
+ALL_CAPABILITIES = frozenset(
+    {'commands', 'events', 'settings', 'key_mappings', 'ui', 'terminal', 'screen', 'scroll', 'clipboard', 'window', 'tabs', 'launch', 'url'}
+)
 
 
 class TestPlugins(unittest.TestCase):
@@ -89,7 +91,9 @@ class TestPlugins(unittest.TestCase):
             self.assertTrue((package_dir / 'smart-scroll' / 'README.rst').is_file())
             self.assertTrue((package_dir / 'smart-scroll' / 'LICENSE').is_file())
             with patch.object(PluginManager, 'bundled_plugins_directory', return_value=package_dir):
-                self.assertEqual(tuple(x['id'] for x in PluginManager(td).bundled_plugins()), ('smart-scroll',))
+                ids = tuple(x['id'] for x in PluginManager(td).bundled_plugins())
+                self.assertEqual(len(ids), 28)
+                self.assertEqual(ids, tuple(sorted(x.name for x in package_dir.iterdir() if x.is_dir())))
 
     @staticmethod
     def enable_plugin(manager: PluginManager, grants: frozenset[str], plugin_id: str = 'sample-plugin') -> None:
@@ -213,6 +217,60 @@ def setup(api):
             self.assertEqual(manager.commands(), ())
             self.assertEqual(manager.loaded, {})
 
+    def test_plugin_ui_and_terminal_integrations_validate_and_dispatch(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            plugins_dir = os.path.join(td, 'plugins')
+            os.mkdir(plugins_dir)
+            directory = self.create_plugin(plugins_dir, capabilities=sorted(ALL_CAPABILITIES))
+            prompts = []
+            choices = []
+            opened_urls = []
+            launched = []
+            clipboard = ['copied']
+            manager = PluginManager(
+                td,
+                prompt_handler=lambda window_id, title, initial, callback: prompts.append((window_id, title, initial, callback)),
+                choice_handler=lambda window_id, title, entries, callback: choices.append((window_id, title, entries, callback)),
+                clipboard_reader=lambda: clipboard[0],
+                clipboard_writer=lambda value: clipboard.__setitem__(0, value),
+                window_reader=lambda window_id: {'id': window_id, 'cwd': '/tmp'},
+                tabs_reader=lambda window_id: ({'id': 7, 'title': 'work'},),
+                tab_focuser=lambda window_id, tab_id: tab_id == 7,
+                launcher=lambda window_id, command, cwd, title, _type, _env: launched.append((window_id, command, cwd, title)),
+                url_opener=lambda window_id, url: opened_urls.append((window_id, url)),
+            )
+            manifest = PluginManifest.read(directory)
+            manager.load(directory, manifest.capabilities)
+            context = manager.loaded['sample-plugin'].context
+            assert context is not None
+            context._window_id = 42
+            prompt_result, choice_result = [], []
+            context.prompt('Find file', prompt_result.append, 'draft')
+            context.choose('Pick tab', [('7', 'work')], choice_result.append)
+            self.assertEqual((prompts[0][0], prompts[0][1], prompts[0][2]), (42, 'Find file', 'draft'))
+            self.assertEqual((choices[0][0], choices[0][1], choices[0][2]), (42, 'Pick tab', (('7', 'work'),)))
+            prompts[0][3]('report.txt')
+            choices[0][3]('7')
+            self.assertEqual(prompt_result, ['report.txt'])
+            self.assertEqual(choice_result, ['7'])
+            self.assertEqual(context.clipboard(), 'copied')
+            self.assertEqual(context.clipboard('result'), 'result')
+            self.assertEqual(context.window_info(), {'id': 42, 'cwd': '/tmp'})
+            self.assertEqual(context.tabs(), ({'id': 7, 'title': 'work'},))
+            context.focus_tab(7)
+            context.launch(('git', 'status', ''), '/tmp', 'Git')
+            self.assertEqual(launched, [(42, ('git', 'status', ''), '/tmp', 'Git')])
+            context.open_url('https://example.org/help')
+            self.assertEqual(opened_urls, [(42, 'https://example.org/help')])
+            for url in ('http://example.org', 'https://user@example.org', 'https://example.org\n@127.0.0.1'):
+                with self.subTest(url=url), self.assertRaises(PluginError):
+                    context.open_url(url)
+            with self.assertRaises(PluginError):
+                context.launch(())
+            manager.disable('sample-plugin')
+            prompts[0][3]('after disable')
+            self.assertEqual(prompt_result, ['report.txt'])
+
     def test_plugin_requires_explicit_capability_grants(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             plugins_dir = os.path.join(td, 'plugins')
@@ -258,13 +316,67 @@ def setup(api):
             self.assertEqual(actions[-1], (19, 'scroll_page_down'))
             self.assertEqual(keys, [(19, ('ctrl+alt+page_down',))])
 
+    def test_tab_switcher_uses_native_tab_api_and_chooser(self) -> None:
+        source = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'kitty', 'plugin_packages', 'tab-switcher')
+        with tempfile.TemporaryDirectory() as td:
+            plugins_dir = os.path.join(td, 'plugins')
+            os.mkdir(plugins_dir)
+            shutil.copytree(source, os.path.join(plugins_dir, 'tab-switcher'))
+            chooser = []
+            focused = []
+            manager = PluginManager(
+                td,
+                tabs_reader=lambda _window_id: ({'id': 12, 'title': 'api', 'is_active': False},),
+                tab_focuser=lambda _window_id, tab_id: (focused.append(tab_id), True)[1],
+                choice_handler=lambda window_id, title, entries, callback: chooser.append((window_id, title, entries, callback)),
+            )
+            manifest = PluginManifest.read(os.path.join(plugins_dir, 'tab-switcher'))
+            manager.load(os.path.join(plugins_dir, 'tab-switcher'), manifest.capabilities)
+            manager.run_command('tab-switcher', 'switch', (), window_id=42)
+            self.assertEqual(chooser[0][:3], (42, 'Switch tab', (('12', 'api'),)))
+            chooser[0][3]('12')
+            self.assertEqual(focused, [12], manager.errors)
+
+    def test_worktree_switcher_parses_paths_and_launches_without_shell_interpolation(self) -> None:
+        source = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'kitty', 'plugin_packages', 'worktree-switcher')
+        with tempfile.TemporaryDirectory() as td:
+            plugins_dir = os.path.join(td, 'plugins')
+            os.mkdir(plugins_dir)
+            shutil.copytree(source, os.path.join(plugins_dir, 'worktree-switcher'))
+            chooser = []
+            launches = []
+            manager = PluginManager(
+                td,
+                window_reader=lambda window_id: {'id': window_id, 'cwd': '/tmp/project'},
+                launcher=lambda window_id, command, cwd, title, _type, _env: launches.append((window_id, command, cwd, title)),
+                choice_handler=lambda window_id, title, entries, callback: chooser.append((entries, callback)),
+            )
+            package = os.path.join(plugins_dir, 'worktree-switcher')
+            manifest = PluginManifest.read(package)
+            manager.load(package, manifest.capabilities)
+            module = manager.loaded['worktree-switcher'].module
+            output = 'worktree /tmp/project\0HEAD abc\0branch refs/heads/main\0\0worktree /tmp/feature;touch pwned\0HEAD def\0branch refs/heads/feature\0\0'
+            with patch.object(module.subprocess, 'run', return_value=type('Result', (), {'stdout': output})()) as run:
+                manager.run_command('worktree-switcher', 'switch', (), window_id=42)
+            run.assert_called_once_with(
+                ['git', '-C', '/tmp/project', 'worktree', 'list', '--porcelain', '-z'],
+                capture_output=True,
+                check=True,
+                text=True,
+                timeout=5,
+            )
+            self.assertEqual(chooser[0][0][1], ('/tmp/feature;touch pwned', 'feature — /tmp/feature;touch pwned'))
+            chooser[0][1]('/tmp/feature;touch pwned')
+            self.assertEqual(launches, [(42, (os.environ.get('SHELL') or os.environ.get('COMSPEC') or '/bin/sh',), '/tmp/feature;touch pwned', 'feature')])
+
     def test_bundled_plugin_install_is_atomic_and_does_not_execute_code(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             manager = PluginManager(td)
             catalog = manager.bundled_plugins()
-            self.assertEqual(tuple(x['id'] for x in catalog), ('smart-scroll',))
-            self.assertEqual(catalog[0]['source_url'], 'https://github.com/yurikhan/kitty-smart-scroll')
-            self.assertEqual(catalog[0]['license'], 'GPL-3.0-or-later')
+            self.assertEqual(len(catalog), 28)
+            smart_scroll = next(x for x in catalog if x['id'] == 'smart-scroll')
+            self.assertEqual(smart_scroll['source_url'], 'https://github.com/yurikhan/kitty-smart-scroll')
+            self.assertEqual(smart_scroll['license'], 'GPL-3.0-or-later')
             installed = manager.install_bundled_plugin('smart-scroll')
             self.assertTrue(installed['approval_required'])
             self.assertEqual(manager.loaded, {})

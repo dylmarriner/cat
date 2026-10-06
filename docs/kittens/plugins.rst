@@ -58,6 +58,69 @@ indicates whether the active screen handled scrolling. Plugins granted
 make it possible to migrate mode-aware scrolling helpers such as
 ``kitty-smart-scroll`` without giving plugins arbitrary window method access.
 
+Shell integration adds the ``command_started``, ``command_finished`` and
+``bell`` events. Command events carry ``cmdline``; ``command_finished`` also
+carries ``exit_code`` and ``duration`` in seconds.
+
+Further capabilities unlock richer integrations:
+
+``appearance``
+    ``api.set_colors({'background': '#101820'}, window_id=None, all_windows=False)``
+    changes colors using :file:`kitty.conf` color names, ``api.reset_colors()``
+    restores the startup colors and ``api.set_background_opacity(0.8)``
+    changes the opacity of the OS window.
+
+``notify``
+    ``api.notify(title, body)`` shows a desktop notification.
+
+``tabs``
+    Also allows ``api.set_tab_title(title, window_id=None)``. An empty title
+    restores the automatic one.
+
+``timers``
+    ``api.add_timer(callback, interval, repeat=False)`` returns an ID for
+    ``api.cancel_timer()``. Timers are cancelled when the plugin is disabled.
+
+``background``
+    ``api.run_process(argv, done, input='', cwd=None, env=None, timeout=60)``
+    runs a program without blocking kitty and calls ``done(error, result)``
+    with its ``stdout`` and ``stderr``. Prefer it for anything that runs a
+    program. ``api.run_in_background(task, done)`` runs a Python ``task`` in a
+    worker thread and calls ``done(error, result)`` on the UI thread. kitty's
+    event loop holds the GIL while it waits, so threads only suit short,
+    mostly blocking work.
+
+``launch``
+    ``api.launch()`` takes ``launch_type`` (``tab``, ``window``, ``overlay`` or
+    ``os-window``), ``env`` and an ``on_exit`` callback, and returns the new
+    window ID. ``api.run_app(script, args, launch_type='overlay', on_result=...)``
+    runs a Python script from the plugin package with kitty's interpreter. The
+    script can write a result to the file named by ``KITTY_PLUGIN_RESULT``,
+    which is passed to ``on_result`` when its window closes.
+    ``KITTY_PLUGIN_DATA`` names the plugin's data directory.
+
+``shaders``
+    ``api.shader_effect('effect.pipeline')`` activates a :doc:`custom shader
+    </custom-shaders>` pipeline shipped in the plugin package and returns a
+    handle bound to one of 16 plugin shader channels. In the pipeline,
+    ``@SIGNAL@`` is replaced by that channel's ``plugin-signal-N`` animation
+    event, and shaders that declare ``static const int PLUGIN_CHANNEL`` get the
+    channel number. ``effect.set(index, x, y, z, w)`` updates
+    ``d.plugin_params[2 * PLUGIN_CHANNEL + index]`` without recompiling, and
+    ``effect.fire()`` starts animations waiting on ``@SIGNAL@`` and
+    ``effect.show(False)`` hides every group of the effect so it costs no GPU
+    time at all. Activating or removing an effect rebuilds the custom shaders
+    in the background, so keep effects loaded and switch them with
+    ``show()`` and parameters.
+
+kitty reaps every child process it starts, so inside a plugin the exit code
+reported by :mod:`subprocess` is not reliable, it is often zero for a failed
+command. Judge the result of a program by its output instead.
+
+Every plugin also has ``api.data_directory``, a private writable directory,
+``api.package_directory`` and ``api.settings()``, which returns the current
+values of its settings pages with defaults filled in.
+
 The API version is :code:`kitty.plugins.PLUGIN_API_VERSION`. kitty rejects
 plugins that do not declare support for the host's API version, lack grants for
 their requested capabilities, or fail during setup. A failed plugin is
@@ -114,8 +177,22 @@ and enable, disable, and uninstall actions for packages found there. Changes to
 an approved package trigger another review before its new code runs.
 
 The checked-in bundled catalog is :file:`kitty/plugin_packages/catalog.json`.
-It currently lists a Plugin API v1 port of the mode-aware scrolling behavior
-from ``kitty-smart-scroll`` at :file:`kitty/plugin_packages/smart-scroll/`.
+Besides a Plugin API v1 port of the mode-aware scrolling behavior from
+``kitty-smart-scroll``, a tab switcher and a Git worktree switcher, it bundles:
+
+* GPU effects: ``fail-glitch``, ``streak-fireworks``, ``pomodoro-aura``,
+  ``prod-guard``, ``warp-screensaver``, ``load-heatwave``, ``git-mood``,
+  ``busy-orbit`` and the color theme ``daylight-themes``.
+* Automation: ``cmd-timer``, ``auto-tab-titles``, ``ssh-themes``,
+  ``command-stats``, ``reopen-closed`` and ``screen-watcher``.
+* Overlay apps: ``sysmon-hud``, ``git-dashboard``, ``emoji-picker``,
+  ``color-picker``, ``file-peek``, ``snake`` and ``typing-test``.
+* Claude powered helpers: ``ai-explain``, ``ai-command`` and ``ai-fix``. They
+  use Claude Code (the ``claude`` command) with your existing login, so no API
+  key is needed, falling back to the ``anthropic`` Python package and
+  Anthropic credentials. They send terminal text to Claude when used.
+
+Each package has a :file:`README.rst` describing its commands.
 The catalog pins each package digest and checks it against the package files
 and manifest before listing or installing it. Choose **Install bundled
 plugin** in kitty's command palette, then review and enable it. Installation

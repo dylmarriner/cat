@@ -157,6 +157,19 @@ def kitten_parse(func: str, rest: str) -> FuncArgsType:
     return 'kitten', parts[1:]
 
 
+@func_with_args(
+    'plugin_command',
+    'enable_plugin',
+    'disable_plugin',
+    'uninstall_plugin',
+    'install_bundled_plugin',
+    'install_catalog_plugin',
+    'update_catalog_plugin',
+)
+def plugin_action_parse(func: str, rest: str) -> FuncArgsType:
+    return func, to_cmdline(rest)
+
+
 @func_with_args('open_url')
 def open_url_parse(func: str, rest: str) -> FuncArgsType:
     from urllib.parse import urlparse

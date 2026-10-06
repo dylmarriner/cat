@@ -40,6 +40,8 @@ mypy-init-return = true
 "kitty_tests/*.py" = ["ANN"]
 "bypy/*" = ["ANN"]
 "3rdparty/*" = ["ANN"]
+# bundled plugins are standalone scripts loaded by the plugin host
+"kitty/plugin_packages/*" = ["ANN", "E402", "E731", "E741"]
 
 [tool.ruff.lint.isort]
 detect-same-package = true

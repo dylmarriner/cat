@@ -31,8 +31,44 @@ DEFAULT_PLUGIN_CATALOG_URL = 'https://raw.githubusercontent.com/dylmarriner/cat/
 PLUGIN_ID_PATTERN = re.compile(r'^[a-z][a-z0-9-]{1,62}[a-z0-9]$')
 PLUGIN_NAME_PATTERN = re.compile(r'^[a-z][a-z0-9_-]{0,63}$')
 LICENSE_PATTERN = re.compile(r'^[A-Za-z0-9.+-]{1,128}$')
-CAPABILITIES = frozenset({'commands', 'settings', 'events', 'key_mappings', 'ui', 'terminal', 'screen', 'scroll'})
-EVENTS = frozenset({'window_focused', 'window_created', 'window_closed', 'child_exited', 'settings_changed'})
+CAPABILITIES = frozenset(
+    {
+        'commands',
+        'settings',
+        'events',
+        'key_mappings',
+        'ui',
+        'terminal',
+        'screen',
+        'scroll',
+        'clipboard',
+        'window',
+        'tabs',
+        'launch',
+        'url',
+        'shaders',
+        'appearance',
+        'notify',
+        'timers',
+        'background',
+    }
+)
+EVENTS = frozenset(
+    {
+        'window_focused',
+        'window_created',
+        'window_closed',
+        'child_exited',
+        'settings_changed',
+        'command_started',
+        'command_finished',
+        'bell',
+    }
+)
+LAUNCH_TYPES = frozenset({'tab', 'window', 'overlay', 'os-window'})
+NUM_PLUGIN_SHADER_CHANNELS = 16  # must match NUM_PLUGIN_SHADER_CHANNELS in state.h
+COLOR_NAME_PATTERN = re.compile(r'^[a-z][a-z0-9_]{0,63}$')
+MIN_TIMER_INTERVAL = 0.01
 SCROLL_ACTIONS = frozenset({'scroll_line_up', 'scroll_line_down', 'scroll_page_up', 'scroll_page_down', 'scroll_home', 'scroll_end'})
 MAX_CATALOG_BYTES = 1 << 20
 MAX_PLUGIN_ARCHIVE_BYTES = 32 << 20
@@ -186,6 +222,9 @@ class PluginEvent:
     tab_id: int | None = None
     title: str = ''
     exit_code: int | None = None
+    # command_started and command_finished events, needs shell integration
+    cmdline: str = ''
+    duration: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -206,6 +245,56 @@ class _LoadedPlugin:
     key_mappings: list[tuple[str, str, tuple[str, ...]]] = field(default_factory=list)
     ui_contributions: list[tuple[str, str]] = field(default_factory=list)
     cleanups: list[Callable[[], None]] = field(default_factory=list)
+    timers: set[int] = field(default_factory=set)
+
+
+@dataclass(frozen=True)
+class ProcessResult:
+    stdout: str
+    stderr: str
+
+
+class ShaderEffect:
+    """A plugin owned custom shader pipeline bound to one plugin shader channel.
+
+    The pipeline sees its channel as the ``PLUGIN_CHANNEL`` variable, reads its
+    parameters from ``d.plugin_params[2 * PLUGIN_CHANNEL]`` and
+    ``d.plugin_params[2 * PLUGIN_CHANNEL + 1]`` and can start animations on
+    the ``@SIGNAL@`` event, which :meth:`fire` triggers.
+    """
+
+    def __init__(self, host: 'PluginManager', plugin_id: str, channel: int, pipeline_path: str):
+        self._host = host
+        self.plugin_id = plugin_id
+        self.channel = channel
+        self.pipeline_path = pipeline_path
+        self.active = True
+
+    def set(self, index: int, x: float, y: float = 0.0, z: float = 0.0, w: float = 0.0) -> None:
+        if index not in (0, 1):
+            raise PluginError('Shader parameter index must be 0 or 1')
+        values = tuple(float(v) for v in (x, y, z, w))
+        if not all(math.isfinite(v) for v in values):
+            raise PluginError('Shader parameters must be finite numbers')
+        if self.active and self._host.shader_param_setter is not None:
+            self._host.shader_param_setter(2 * self.channel + index, values)
+
+    def fire(self) -> None:
+        if self.active and self._host.shader_signal_firer is not None:
+            self._host.shader_signal_firer(self.channel)
+
+    def show(self, visible: bool = True) -> None:
+        """Hidden effects are skipped by the renderer and cost no GPU time."""
+        if self.active and self._host.shader_visibility_setter is not None:
+            self._host.shader_visibility_setter(self.channel, bool(visible))
+
+    def remove(self) -> None:
+        if self.active:
+            self.set(0, 0)
+            self.set(1, 0)
+            self.show(True)
+            self.active = False
+            self._host._release_shader_effect(self)
 
 
 class PluginContext:
@@ -283,6 +372,355 @@ class PluginContext:
             raise PluginError('Plugin cleanup handler must be callable')
         self._loaded.cleanups.append(callback)
 
+    def prompt(self, title: str, callback: Callable[[str], None], initial: str = '') -> None:
+        self._host._require_capability(self._loaded, 'ui')
+        if not isinstance(title, str) or not title.strip() or not callable(callback) or not isinstance(initial, str):
+            raise PluginError('A plugin prompt needs a title, initial value, and callback')
+        if self._host.prompt_handler is None:
+            raise PluginError('Plugin prompts are not available in this host context')
+        self._host.prompt_handler(self._window_id, title.strip(), initial, self._guard_callback(callback))
+
+    def choose(self, title: str, entries: Sequence[tuple[str, str]], callback: Callable[[str], None]) -> None:
+        self._host._require_capability(self._loaded, 'ui')
+        if not isinstance(title, str) or not title.strip() or not callable(callback):
+            raise PluginError('A plugin chooser needs a title and callback')
+        choices = tuple(entries)
+        if not choices or any(not isinstance(value, str) or not isinstance(label, str) or not label.strip() for value, label in choices):
+            raise PluginError('A plugin chooser needs non-empty string choices')
+        if len({value for value, _ in choices}) != len(choices):
+            raise PluginError('Plugin chooser values must be unique')
+        if self._host.choice_handler is None:
+            raise PluginError('Plugin choices are not available in this host context')
+        self._host.choice_handler(self._window_id, title.strip(), choices, self._guard_callback(callback))
+
+    def _guard_callback(self, callback: Callable[[str], None]) -> Callable[[str], None]:
+        window_id = self._window_id
+
+        def guarded(value: str) -> None:
+            if self._host.loaded.get(self.plugin_id) is not self._loaded:
+                return
+            previous_window_id = self._window_id
+            self._window_id = window_id
+            try:
+                callback(value)
+            except Exception as err:
+                self._host.report_error(self.plugin_id, f'Plugin UI callback failed: {err}')
+            finally:
+                self._window_id = previous_window_id
+
+        return guarded
+
+    def clipboard(self, text: str | None = None) -> str:
+        self._host._require_capability(self._loaded, 'clipboard')
+        if text is None:
+            if self._host.clipboard_reader is None:
+                raise PluginError('Clipboard access is not available in this host context')
+            return self._host.clipboard_reader()
+        if not isinstance(text, str):
+            raise PluginError('Clipboard text must be a string')
+        if self._host.clipboard_writer is None:
+            raise PluginError('Clipboard access is not available in this host context')
+        self._host.clipboard_writer(text)
+        return text
+
+    def window_info(self, window_id: int | None = None) -> dict[str, Any]:
+        self._host._require_capability(self._loaded, 'window')
+        target = self._window_id if window_id is None else window_id
+        if target is None or self._host.window_reader is None:
+            raise PluginError('Window information is not available in this host context')
+        return self._host.window_reader(target)
+
+    def tabs(self) -> tuple[dict[str, Any], ...]:
+        self._host._require_capability(self._loaded, 'tabs')
+        if self._window_id is None or self._host.tabs_reader is None:
+            raise PluginError('Tab information is not available in this host context')
+        return self._host.tabs_reader(self._window_id)
+
+    def focus_tab(self, tab_id: int) -> None:
+        self._host._require_capability(self._loaded, 'tabs')
+        if type(tab_id) is not int or self._window_id is None or self._host.tab_focuser is None:
+            raise PluginError('Focusing a tab needs a live window and tab ID')
+        if not self._host.tab_focuser(self._window_id, tab_id):
+            raise PluginError(f'Tab {tab_id} is not available in this tab manager')
+
+    def launch(
+        self,
+        command: Sequence[str],
+        cwd: str | None = None,
+        tab_title: str = '',
+        launch_type: str = 'tab',
+        env: Mapping[str, str] | None = None,
+        on_exit: Callable[[], None] | None = None,
+    ) -> int | None:
+        self._host._require_capability(self._loaded, 'launch')
+        if launch_type not in LAUNCH_TYPES:
+            raise PluginError(f'Unsupported launch type: {launch_type!r}')
+        if env is not None and any(not isinstance(k, str) or not k or '=' in k or not isinstance(v, str) for k, v in env.items()):
+            raise PluginError('Launch environment must map variable names to strings')
+        if on_exit is not None and not callable(on_exit):
+            raise PluginError('on_exit must be callable')
+        if isinstance(command, (str, bytes)) or not command or any(not isinstance(arg, str) for arg in command) or not command[0]:
+            raise PluginError('Launching a program needs a non-empty argument list')
+        if cwd is not None and not isinstance(cwd, str):
+            raise PluginError('Launch working directory must be a string')
+        if not isinstance(tab_title, str):
+            raise PluginError('Launch tab title must be a string')
+        if self._host.launcher is None:
+            raise PluginError('Program launching is not available in this host context')
+        window_id = self._host.launcher(self._window_id, tuple(command), cwd, tab_title, launch_type, dict(env or {}))
+        if on_exit is not None and window_id is not None:
+            self._host._exit_callbacks[window_id] = (self.plugin_id, self._guard(on_exit, 'Exit callback'))
+        return window_id
+
+    def open_url(self, url: str) -> None:
+        self._host._require_capability(self._loaded, 'url')
+        if not isinstance(url, str) or not _valid_https_url(url):
+            raise PluginError('Plugin URLs must be valid HTTPS URLs')
+        if self._host.url_opener is None:
+            raise PluginError('Opening URLs is not available in this host context')
+        self._host.url_opener(self._window_id, url)
+
+    @property
+    def data_directory(self) -> str:
+        """A private, writable directory for this plugin's state."""
+        path = self._host.plugins_directory / 'data' / self.plugin_id
+        path.mkdir(parents=True, exist_ok=True)
+        return str(path)
+
+    @property
+    def package_directory(self) -> str:
+        return str(self._loaded.manifest.directory)
+
+    def settings(self) -> dict[str, dict[str, Any]]:
+        """Current values of this plugin's settings pages, with defaults filled in."""
+        saved = self._host._read_plugin_settings(self.plugin_id)
+        return {
+            page['id']: {f['key']: saved.get(page['id'], {}).get(f['key'], f['default']) for f in page['fields']}
+            for page in self._loaded.manifest.settings_pages
+        }
+
+    def _target_window(self, window_id: int | None) -> int:
+        target = self._window_id if window_id is None else window_id
+        if type(target) is not int:
+            raise PluginError('This action needs a live kitty window')
+        return target
+
+    def _guard(self, callback: Callable[..., Any], what: str) -> Callable[..., None]:
+        loaded = self._loaded
+
+        def guarded(*args: Any) -> None:
+            if self._host.loaded.get(self.plugin_id) is not loaded:
+                return
+            try:
+                callback(*args)
+            except Exception as err:
+                self._host.report_error(self.plugin_id, f'{what} failed: {err}')
+
+        return guarded
+
+    def notify(self, title: str, body: str = '') -> None:
+        self._host._require_capability(self._loaded, 'notify')
+        if not isinstance(title, str) or not title.strip() or len(title) > 256 or not isinstance(body, str) or len(body) > 4096:
+            raise PluginError('A notification needs a title of at most 256 characters and a body of at most 4096')
+        if self._host.notifier is None:
+            raise PluginError('Notifications are not available in this host context')
+        self._host.notifier(title.strip(), body)
+
+    def set_tab_title(self, title: str, window_id: int | None = None) -> None:
+        """Set the title of the tab containing the window, an empty title restores the automatic one."""
+        self._host._require_capability(self._loaded, 'tabs')
+        if not isinstance(title, str) or len(title) > 256:
+            raise PluginError('Tab titles must be strings of at most 256 characters')
+        if self._host.tab_title_setter is None:
+            raise PluginError('Setting tab titles is not available in this host context')
+        self._host.tab_title_setter(self._target_window(window_id), title)
+
+    def set_colors(self, colors: Mapping[str, str], window_id: int | None = None, all_windows: bool = False) -> None:
+        """Change colors using kitty.conf color names, for example ``{'background': '#101820'}``."""
+        self._host._require_capability(self._loaded, 'appearance')
+        if not isinstance(colors, Mapping) or not colors:
+            raise PluginError('Colors must be a non-empty mapping of color names to values')
+        for key, value in colors.items():
+            if not isinstance(key, str) or not COLOR_NAME_PATTERN.fullmatch(key) or not isinstance(value, str) or not value or '\n' in value:
+                raise PluginError(f'Invalid color setting: {key!r}')
+        if self._host.color_setter is None:
+            raise PluginError('Changing colors is not available in this host context')
+        self._host.color_setter(None if all_windows else self._target_window(window_id), dict(colors))
+
+    def reset_colors(self, window_id: int | None = None, all_windows: bool = False) -> None:
+        self._host._require_capability(self._loaded, 'appearance')
+        if self._host.color_setter is None:
+            raise PluginError('Changing colors is not available in this host context')
+        self._host.color_setter(None if all_windows else self._target_window(window_id), None)
+
+    def set_background_opacity(self, opacity: float, window_id: int | None = None) -> None:
+        self._host._require_capability(self._loaded, 'appearance')
+        if isinstance(opacity, bool) or not isinstance(opacity, (int, float)) or not 0 <= opacity <= 1:
+            raise PluginError('Background opacity must be a number from 0 to 1')
+        if self._host.opacity_setter is None:
+            raise PluginError('Changing opacity is not available in this host context')
+        self._host.opacity_setter(self._target_window(window_id), float(opacity))
+
+    def add_timer(self, callback: Callable[[], None], interval: float, repeat: bool = False) -> int:
+        self._host._require_capability(self._loaded, 'timers')
+        if not callable(callback) or isinstance(interval, bool) or not isinstance(interval, (int, float)) or not math.isfinite(interval):
+            raise PluginError('A timer needs a callback and a finite interval')
+        if self._host.timer_adder is None or self._host.timer_remover is None:
+            raise PluginError('Timers are not available in this host context')
+        guarded = self._guard(callback, 'Timer')
+        timers = self._loaded.timers
+        timer_id = 0
+
+        def fire(_timer_id: int | None = None) -> None:
+            if not repeat:
+                timers.discard(timer_id)
+            guarded()
+
+        timer_id = self._host.timer_adder(fire, max(MIN_TIMER_INTERVAL, float(interval)), bool(repeat))
+        timers.add(timer_id)
+        return timer_id
+
+    def cancel_timer(self, timer_id: int) -> None:
+        self._host._require_capability(self._loaded, 'timers')
+        if timer_id in self._loaded.timers:
+            self._loaded.timers.discard(timer_id)
+            if self._host.timer_remover is not None:
+                self._host.timer_remover(timer_id)
+
+    def run_process(
+        self,
+        argv: Sequence[str],
+        done: Callable[[Exception | None, 'ProcessResult | None'], None],
+        input: str = '',
+        cwd: str | None = None,
+        env: Mapping[str, str] | None = None,
+        timeout: float = 60.0,
+    ) -> None:
+        """Run a program without blocking kitty and call done(error, result) on the UI thread.
+
+        Prefer this to running a subprocess in run_in_background(). kitty reaps
+        all child processes, so the result has no exit code: judge success by
+        the output.
+        """
+        self._host._require_capability(self._loaded, 'background')
+        if isinstance(argv, (str, bytes)) or not argv or any(not isinstance(a, str) for a in argv):
+            raise PluginError('run_process needs a non-empty argument list')
+        if not callable(done) or not isinstance(input, str) or not math.isfinite(timeout) or timeout <= 0:
+            raise PluginError('run_process needs a callback, string input and a positive timeout')
+        if self._host.timer_adder is None or self._host.timer_remover is None:
+            raise PluginError('Running programs is not available in this host context')
+        import subprocess
+        import time
+
+        callback = self._guard(done, 'Process callback')
+        files = [tempfile.TemporaryFile() for _ in range(3)]
+        stdin, stdout, stderr = files
+        stdin.write(input.encode('utf-8'))
+        stdin.seek(0)
+
+        def close_files() -> None:
+            for f in files:
+                f.close()
+
+        try:
+            proc = subprocess.Popen(list(argv), stdin=stdin, stdout=stdout, stderr=stderr, cwd=cwd, env=None if env is None else dict(env))
+        except OSError as err:
+            close_files()
+            callback(err, None)
+            return
+        deadline = time.monotonic() + timeout
+        timers = self._loaded.timers
+        timer_id = 0
+
+        def poll(_timer_id: int | None = None) -> None:
+            if proc.poll() is None:
+                if time.monotonic() < deadline:
+                    return
+                proc.kill()
+                error: Exception | None = TimeoutError(f'{argv[0]} did not finish in {timeout:g} seconds')
+            else:
+                error = None
+            timers.discard(timer_id)
+            self._host.timer_remover(timer_id)  # type: ignore[misc]
+            result = None
+            if error is None:
+                stdout.seek(0)
+                stderr.seek(0)
+                result = ProcessResult(stdout.read().decode('utf-8', 'replace'), stderr.read().decode('utf-8', 'replace'))
+            close_files()
+            callback(error, result)
+
+        timer_id = self._host.timer_adder(poll, 0.05, True)
+        timers.add(timer_id)
+
+    def run_in_background(self, task: Callable[[], Any], done: Callable[[Exception | None, Any], None] | None = None) -> None:
+        """Run task in a worker thread, then call done(error, result) on the UI thread."""
+        self._host._require_capability(self._loaded, 'background')
+        if not callable(task) or (done is not None and not callable(done)):
+            raise PluginError('Background work needs a callable task')
+        if self._host.background_runner is None:
+            raise PluginError('Background work is not available in this host context')
+        plugin_id = self.plugin_id
+
+        def finished(error: Exception | None, value: Any) -> None:
+            if done is None:
+                if error is not None:
+                    self._host.report_error(plugin_id, f'Background task failed: {error}')
+                return
+            self._guard(done, 'Background task callback')(error, value)
+
+        self._host.background_runner(task, finished)
+
+    def shader_effect(self, pipeline: str) -> ShaderEffect:
+        """Activate a custom shader pipeline shipped in this plugin's package."""
+        self._host._require_capability(self._loaded, 'shaders')
+        return self._host._create_shader_effect(self._loaded, pipeline)
+
+    def run_app(
+        self,
+        script: str,
+        args: Sequence[str] = (),
+        launch_type: str = 'overlay',
+        title: str = '',
+        cwd: str | None = None,
+        on_result: Callable[[str], None] | None = None,
+    ) -> int | None:
+        """Run a Python script from this plugin's package in a kitty window.
+
+        The script runs with kitty's Python interpreter. It can write a result
+        to the file named by the ``KITTY_PLUGIN_RESULT`` environment variable,
+        which is passed to on_result when the window closes.
+        """
+        self._host._require_capability(self._loaded, 'launch')
+        package = self._loaded.manifest.directory
+        if not isinstance(script, str) or not script.endswith('.py') or PurePosixPath(script).is_absolute() or '..' in PurePosixPath(script).parts:
+            raise PluginError('Plugin apps must be relative .py files inside the plugin package')
+        script_path = (package / script).resolve(strict=True)
+        if package not in script_path.parents:
+            raise PluginError('Plugin apps must be inside the plugin package')
+        if isinstance(args, (str, bytes)) or any(not isinstance(a, str) for a in args):
+            raise PluginError('Plugin app arguments must be strings')
+        results = Path(self.data_directory) / '.results'
+        results.mkdir(exist_ok=True)
+        fd, result_path = tempfile.mkstemp(dir=results, prefix='result-')
+        os.close(fd)
+        os.remove(result_path)
+        env = {'KITTY_PLUGIN_RESULT': result_path, 'KITTY_PLUGIN_DATA': self.data_directory}
+
+        def finished() -> None:
+            try:
+                with open(result_path, encoding='utf-8') as f:
+                    text = f.read()
+                os.remove(result_path)
+            except FileNotFoundError:
+                text = ''
+            if on_result is not None:
+                on_result(text)
+
+        from .constants import kitty_exe
+
+        return self.launch((kitty_exe(), '+launch', str(script_path), *args), cwd=cwd, tab_title=title, launch_type=launch_type, env=env, on_exit=finished)
+
     def read_screen(self, window_id: int) -> str:
         self._host._require_capability(self._loaded, 'screen')
         if self._host.screen_reader is None:
@@ -336,6 +774,26 @@ class PluginManager:
         terminal_writer: Callable[[int, str], None] | None = None,
         scroll_handler: Callable[[int, str], bool | None] | None = None,
         key_writer: Callable[[int, tuple[str, ...]], None] | None = None,
+        prompt_handler: Callable[[int | None, str, str, Callable[[str], None]], None] | None = None,
+        choice_handler: Callable[[int | None, str, tuple[tuple[str, str], ...], Callable[[str], None]], None] | None = None,
+        clipboard_reader: Callable[[], str] | None = None,
+        clipboard_writer: Callable[[str], None] | None = None,
+        window_reader: Callable[[int], dict[str, Any]] | None = None,
+        tabs_reader: Callable[[int], tuple[dict[str, Any], ...]] | None = None,
+        tab_focuser: Callable[[int, int], bool] | None = None,
+        launcher: Callable[[int | None, tuple[str, ...], str | None, str, str, dict[str, str]], int | None] | None = None,
+        url_opener: Callable[[int | None, str], None] | None = None,
+        notifier: Callable[[str, str], None] | None = None,
+        tab_title_setter: Callable[[int, str], None] | None = None,
+        color_setter: Callable[[int | None, dict[str, str] | None], None] | None = None,
+        opacity_setter: Callable[[int, float], None] | None = None,
+        timer_adder: Callable[[Callable[[int | None], None], float, bool], int] | None = None,
+        timer_remover: Callable[[int], None] | None = None,
+        background_runner: Callable[[Callable[[], Any], Callable[[Exception | None, Any], None]], None] | None = None,
+        shader_pipelines_setter: Callable[[tuple[str, ...]], None] | None = None,
+        shader_param_setter: Callable[[int, tuple[float, ...]], None] | None = None,
+        shader_signal_firer: Callable[[int], None] | None = None,
+        shader_visibility_setter: Callable[[int, bool], None] | None = None,
     ):
         self.config_directory = Path(config_directory).resolve()
         self.on_change = on_change
@@ -343,6 +801,28 @@ class PluginManager:
         self.terminal_writer = terminal_writer
         self.scroll_handler = scroll_handler
         self.key_writer = key_writer
+        self.prompt_handler = prompt_handler
+        self.choice_handler = choice_handler
+        self.clipboard_reader = clipboard_reader
+        self.clipboard_writer = clipboard_writer
+        self.window_reader = window_reader
+        self.tabs_reader = tabs_reader
+        self.tab_focuser = tab_focuser
+        self.launcher = launcher
+        self.url_opener = url_opener
+        self.notifier = notifier
+        self.tab_title_setter = tab_title_setter
+        self.color_setter = color_setter
+        self.opacity_setter = opacity_setter
+        self.timer_adder = timer_adder
+        self.timer_remover = timer_remover
+        self.background_runner = background_runner
+        self.shader_pipelines_setter = shader_pipelines_setter
+        self.shader_param_setter = shader_param_setter
+        self.shader_signal_firer = shader_signal_firer
+        self.shader_visibility_setter = shader_visibility_setter
+        self._shader_effects: dict[int, ShaderEffect] = {}
+        self._exit_callbacks: dict[int, tuple[str, Callable[[], None]]] = {}
         self.plugins_directory = self.config_directory / 'plugins'
         self.state_path = self.plugins_directory / self.state_filename
         self.loaded: dict[str, _LoadedPlugin] = {}
@@ -1015,15 +1495,73 @@ class PluginManager:
                     cleanup()
                 except Exception as cleanup_error:
                     self.report_error(plugin_id, f'Failed to clean up after load error: {cleanup_error}')
+            self._release_host_resources(loaded)
             self._remove_modules(module_name)
             raise
         self.loaded[plugin_id] = loaded
         self.errors.pop(plugin_id, None)
 
+    def _create_shader_effect(self, loaded: _LoadedPlugin, pipeline: str) -> ShaderEffect:
+        package = loaded.manifest.directory
+        if (
+            not isinstance(pipeline, str)
+            or not pipeline.endswith('.pipeline')
+            or PurePosixPath(pipeline).is_absolute()
+            or '..' in PurePosixPath(pipeline).parts
+        ):
+            raise PluginError('Shader pipelines must be relative .pipeline files inside the plugin package')
+        source = (package / pipeline).resolve(strict=True)
+        if package not in source.parents:
+            raise PluginError('Shader pipelines must be inside the plugin package')
+        channel = next((c for c in range(NUM_PLUGIN_SHADER_CHANNELS) if c not in self._shader_effects), None)
+        if channel is None:
+            raise PluginError(f'All {NUM_PLUGIN_SHADER_CHANNELS} plugin shader channels are in use, disable another shader plugin first')
+        plugin_id = loaded.manifest.plugin_id
+        # The pipeline is copied next to its shaders with the channel filled in,
+        # since kitty looks for shaders in the directory of the pipeline first
+        output = self.plugins_directory / 'data' / plugin_id / 'shaders' / f'channel-{channel}'
+        shutil.rmtree(output, ignore_errors=True)
+        output.mkdir(parents=True)
+        for shader in source.parent.glob('*.slang'):
+            shutil.copyfile(shader, output / shader.name)
+        text = source.read_text(encoding='utf-8').replace('@CHANNEL@', str(channel)).replace('@SIGNAL@', f'plugin-signal-{channel}')
+        # bind every group to the channel so ShaderEffect.show() can switch it off
+        text = re.sub(r'^(\s*)startgroup\s*$', lambda m: f'{m.group(0)}\n{m.group(1)}    plugin_channel {channel}', text, flags=re.MULTILINE)
+        destination = output / source.name
+        destination.write_text(f'var int PLUGIN_CHANNEL = {channel}\n{text}', encoding='utf-8')
+        effect = ShaderEffect(self, plugin_id, channel, str(destination))
+        self._shader_effects[channel] = effect
+        loaded.cleanups.append(effect.remove)
+        effect.set(0, 0)
+        effect.set(1, 0)
+        effect.show(True)
+        self._update_shader_pipelines()
+        return effect
+
+    def _release_shader_effect(self, effect: ShaderEffect) -> None:
+        if self._shader_effects.get(effect.channel) is effect:
+            del self._shader_effects[effect.channel]
+            self._update_shader_pipelines()
+
+    def _update_shader_pipelines(self) -> None:
+        if self.shader_pipelines_setter is not None:
+            self.shader_pipelines_setter(tuple(self._shader_effects[c].pipeline_path for c in sorted(self._shader_effects)))
+
+    def _release_host_resources(self, loaded: _LoadedPlugin) -> None:
+        for timer_id in tuple(loaded.timers):
+            if self.timer_remover is not None:
+                self.timer_remover(timer_id)
+        loaded.timers.clear()
+        plugin_id = loaded.manifest.plugin_id
+        for window_id, (owner, _) in tuple(self._exit_callbacks.items()):
+            if owner == plugin_id:
+                del self._exit_callbacks[window_id]
+
     def disable(self, plugin_id: str) -> None:
         loaded = self.loaded.pop(plugin_id, None)
         if loaded is None:
             return
+        self._release_host_resources(loaded)
         for cleanup in reversed(loaded.cleanups):
             try:
                 cleanup()
@@ -1059,6 +1597,10 @@ class PluginManager:
             context._window_id = previous_window_id
 
     def emit(self, event: PluginEvent) -> None:
+        if event.name == 'window_closed' and event.window_id is not None:
+            exit_callback = self._exit_callbacks.pop(event.window_id, None)
+            if exit_callback is not None:
+                exit_callback[1]()
         for plugin_id, callback in tuple(self._callbacks.get(event.name, ())):
             try:
                 callback(event)

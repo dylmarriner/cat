@@ -1,0 +1,36 @@
+{
+  "id": "cmd-timer",
+  "name": "Command timer",
+  "version": "1.0.0",
+  "api_versions": [
+    1
+  ],
+  "entry_point": "main.py",
+  "capabilities": [
+    "events",
+    "notify",
+    "settings"
+  ],
+  "source_url": "https://github.com/dylmarriner/cat",
+  "license": "GPL-3.0-or-later",
+  "settings": [
+    {
+      "id": "timer",
+      "title": "Command timer",
+      "fields": [
+        {
+          "key": "min_seconds",
+          "label": "Notify for commands running at least (seconds)",
+          "type": "integer",
+          "default": 10
+        },
+        {
+          "key": "notify_when_focused",
+          "label": "Notify even when the window is focused",
+          "type": "boolean",
+          "default": false
+        }
+      ]
+    }
+  ]
+}
